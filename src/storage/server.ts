@@ -5,8 +5,11 @@
 // records already there. Data is per user (session.userId).
 import { FastMCP } from 'fastmcp';
 import { instrumentServer } from '../usage/instrumentServer.js';
+import { requireAdminForEveryTool } from '../admin-mcp/adminGuard.js';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import {
   createCollectionSchema,
   deleteRecordsSchema,
@@ -33,11 +36,20 @@ import {
 } from './ops.js';
 import type { Fields } from './fieldSchema.js';
 
-export const storageServer = instrumentServer(new FastMCP<UserSession>({
+// Admins only (ADMIN_ONLY_MCPS, src/auth/admin.ts): the guard re-checks the
+// caller on every call, since FastMCP authenticates once per session.
+export const storageServer = requireAdminForEveryTool(instrumentServer(new FastMCP<UserSession>({
   name: 'Storage MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'storage'),
-}), 'storage');
+}), 'storage'), 'The Storage MCP is for administrators only. Your account is not in ADMIN_EMAILS.');
+
+// Required once any Storage REST catalog entry is `live`: a script moving
+// records in bulk needs a short-lived bearer (or it falls back to the
+// permanent dashboard API key) and a way to discover the endpoints.
+// src/__tests__/sharedToolsRegistration.test.ts enforces this.
+registerMintRestBearerForCurl(storageServer);
+registerListRestEndpoints(storageServer);
 
 const json = (value: unknown): string => JSON.stringify(value, null, 2);
 

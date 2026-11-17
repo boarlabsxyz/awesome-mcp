@@ -45,6 +45,41 @@ export function extractElementTexts(element: slides_v1.Schema$PageElement): stri
   return texts;
 }
 
+/**
+ * A pinned revision that is no longer the latest: Google answers 400 and writes
+ * nothing. Reported as that, never retried against a fresh revision, which would
+ * overwrite the change the pin exists to protect.
+ *
+ * UNVERIFIED against live Google: the only link between that 400 and "stale" is
+ * the word "revision" in the message (Google documents just "400 bad request").
+ * If a live stale pin's message lacks it, this falls through to the ordinary
+ * bad-request path, so check that first on a live run.
+ */
+export function isStaleRevision(error: any, requiredRevisionId: string | undefined): boolean {
+  return Boolean(requiredRevisionId) && error?.code === 400 && /revision/i.test(String(error?.message));
+}
+
+/**
+ * The REST answer for a failed POST /api/v1/slides/{id}/batchUpdate, or null to
+ * let sendUpstreamError map it (404/403/500). Pure, so the mapping is testable
+ * without a Slides client.
+ */
+export function slidesBatchUpdateErrorResponse(
+  err: any,
+  requiredRevisionId: unknown,
+): { status: number; body: { error: string } } | null {
+  const pin = typeof requiredRevisionId === 'string' ? requiredRevisionId : undefined;
+  if (isStaleRevision(err, pin)) return { status: 409, body: { error: staleRevisionMessage(pin!) } };
+  // Google's 400 names the bad request; answering it as 500 blamed the server.
+  if (err?.code === 400) return { status: 400, body: { error: err.message || 'Invalid request' } };
+  return null;
+}
+
+export function staleRevisionMessage(requiredRevisionId: string): string {
+  return `The presentation changed after revision ${requiredRevisionId} was read, so Google rejected the update and `
+    + 'nothing was written. Re-read it with getPresentation for the current revision and content, then retry.';
+}
+
 function handleSlidesError(error: any, context: string, notFoundMsg: string): never {
   if (error.code === 404) throw new UserError(notFoundMsg);
   if (error.code === 403) throw new UserError("Permission denied for this presentation.");
@@ -90,6 +125,9 @@ export async function handleGetPresentation(
 
     let result = `**Presentation:** ${presentation.title}\n`;
     result += `**ID:** ${presentation.presentationId}\n`;
+    // The id an edit pins to with requiredRevisionId. Google only returns it to
+    // users with edit access, so its absence means read-only, not an error.
+    if (presentation.revisionId) result += `**Revision ID:** ${presentation.revisionId}\n`;
     result += `**Slides:** ${slidesList.length}\n`;
 
     if (presentation.pageSize?.width && presentation.pageSize?.height) {
@@ -216,7 +254,7 @@ export async function handleGetPageThumbnail(
 
 export async function handleBatchUpdatePresentation(
   slides: slides_v1.Slides,
-  args: { presentationId: string; requests: Record<string, any>[] },
+  args: { presentationId: string; requests: Record<string, any>[]; requiredRevisionId?: string },
   log: Log
 ): Promise<string> {
   log.info(`Batch updating presentation ${args.presentationId} with ${args.requests.length} request(s)`);
@@ -225,11 +263,16 @@ export async function handleBatchUpdatePresentation(
       presentationId: args.presentationId,
       requestBody: {
         requests: args.requests as slides_v1.Schema$Request[],
+        ...(args.requiredRevisionId ? { writeControl: { requiredRevisionId: args.requiredRevisionId } } : {}),
       },
     });
 
     const replies = response.data.replies || [];
-    let result = `Batch update successful! ${args.requests.length} request(s) applied.\n\n`;
+    const revisionId = response.data.writeControl?.requiredRevisionId;
+    let result = `Batch update successful! ${args.requests.length} request(s) applied.\n`;
+    if (revisionId) result += `Presentation revision is now ${revisionId}.\n`;
+    else if (args.requiredRevisionId) result += 'Google did not return the new revision; re-read before pinning another update.\n';
+    result += '\n';
 
     if (replies.length > 0) {
       result += `**Replies:**\n`;
@@ -244,6 +287,9 @@ export async function handleBatchUpdatePresentation(
     return result;
   } catch (error: any) {
     log.error(`Error in batch update: ${error.message || error}`);
+    if (isStaleRevision(error, args.requiredRevisionId)) {
+      throw new UserError(staleRevisionMessage(args.requiredRevisionId!));
+    }
     if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to this presentation.");
     handleSlidesError(error, 'batch update presentation', `Presentation not found (ID: ${args.presentationId}).`);
   }

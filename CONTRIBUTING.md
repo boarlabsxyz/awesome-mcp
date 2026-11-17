@@ -104,6 +104,7 @@ When ready, run **Create Tag (CI-gated)** from the Actions tab with a `v*` tag (
 
 ### `release-notes.yml` — Triggered by v* tag push
 - Collects commits between tags, resolves ClickUp task titles
+- Adds an "Action needed" reconnect section for any connector whose OAuth scopes grew since the previous tag (`.github/scripts/detect-scope-changes.mjs`)
 - Posts release notes to Slack
 - Updates `/updates` page (commits to repo)
 - Sends email notification to all users

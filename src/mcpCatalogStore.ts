@@ -544,6 +544,9 @@ export async function seedDefaultCatalogs(): Promise<void> {
     mcpUrl: googleGmailMcpUrl,
     scopes: [
       'https://www.googleapis.com/auth/gmail.modify',
+      // Filters (createFilter/listFilters/getFilter). Connections made before
+      // it was added must reconnect; the tools say so on the 403.
+      'https://www.googleapis.com/auth/gmail.settings.basic',
     ],
     googleClientId: googleGmailClientId,
     googleClientSecret: googleGmailClientSecret,
@@ -551,6 +554,7 @@ export async function seedDefaultCatalogs(): Promise<void> {
       'https://www.googleapis.com/auth/userinfo.email',
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/gmail.settings.basic',
     ],
     isLocal: process.env.GOOGLE_GMAIL_MCP_URL ? false : true,
     isActive: true,
@@ -708,7 +712,12 @@ export async function seedDefaultCatalogs(): Promise<void> {
     // reaction_added (message events ride on channels:history/groups:history,
     // already above). Every addition here costs every already-connected user a
     // reconnect to re-consent, so batch them rather than shipping one at a time.
-    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read', 'files:read', 'search:read', 'reactions:read'],
+    // The second line is one such batch (src/slack/workspaceTools.ts):
+    // createChannel, addReaction, uploadFile, getUserProfile (custom fields and
+    // email), canvases and lists. Tools reached without them answer Slack's
+    // missing_scope with needed/provided, which names the reconnect.
+    oauthScopes: ['channels:history', 'channels:read', 'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write', 'mpim:history', 'mpim:read', 'mpim:write', 'chat:write', 'users:read', 'team:read', 'files:read', 'search:read', 'reactions:read',
+      'channels:write', 'groups:write', 'reactions:write', 'files:write', 'users.profile:read', 'users:read.email', 'canvases:read', 'canvases:write', 'lists:read', 'lists:write'],
     isLocal: !process.env.SLACK_USER_MCP_URL,
     isActive: true,
   });
@@ -934,6 +943,23 @@ export async function seedDefaultCatalogs(): Promise<void> {
     googleClientSecret: null,
     oauthScopes: [],
     isLocal: !process.env.STORAGE_MCP_URL,
+    isActive: true,
+  });
+
+  // The Sandbox MCP runs code on this platform's own runner with per-user quotas:
+  // no provider credential, connecting is one click (src/sandbox/connect.ts).
+  await createMcpCatalog({
+    slug: 'sandbox',
+    name: 'Sandbox MCP',
+    description: 'A cloud sandbox where Claude runs Python or JavaScript against your connected services, and shows you only the result.',
+    iconUrl: null,
+    mcpUrl: normalizeUrl(process.env.SANDBOX_MCP_URL, '/sandbox'),
+    provider: 'sandbox',
+    scopes: [],
+    googleClientId: null,
+    googleClientSecret: null,
+    oauthScopes: [],
+    isLocal: !process.env.SANDBOX_MCP_URL,
     isActive: true,
   });
 

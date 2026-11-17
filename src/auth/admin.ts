@@ -15,6 +15,16 @@ export function adminEmails(): string[] {
     .filter(Boolean);
 }
 
+/**
+ * MCPs only administrators may see, connect or call: the Admin MCP, plus
+ * Storage and Sandbox. Every gate reads this set — the catalog filter and
+ * the connect route (webServer.ts), resolveSession (mcpAuthenticate.ts), the
+ * per-call guard on each server (adminGuard.ts) and the Storage REST plane.
+ * To open one to everyone, remove it here AND drop requireAdminForEveryTool
+ * from its server.ts.
+ */
+export const ADMIN_ONLY_MCPS: ReadonlySet<string> = new Set(['admin', 'storage', 'sandbox']);
+
 /** True when `email` is in ADMIN_EMAILS (case-insensitive). Anything not a non-empty string is false. */
 export function isAdminEmail(email: unknown): boolean {
   if (typeof email !== 'string' || !email.trim()) return false;

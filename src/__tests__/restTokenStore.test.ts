@@ -18,6 +18,13 @@ describe('restTokenStore (memory mode)', () => {
     assert.equal(minted.ttlSeconds, REST_TOKEN_TTL_SECONDS);
   });
 
+  it('mintRestToken takes a TTL for callers that need another lifetime', async () => {
+    const before = Date.now();
+    const minted = await mintRestToken(1, 'sbx', 330);
+    assert.equal(minted.ttlSeconds, 330);
+    assert.ok(minted.expiresAt >= before + 330_000 && minted.expiresAt <= Date.now() + 330_000);
+  });
+
   it('lookupRestToken returns the userId for a freshly minted token', async () => {
     const minted = await mintRestToken(42);
     const userId = await lookupRestToken(minted.token);

@@ -184,9 +184,7 @@ npm test
 
 Then eyeball the diff of `docs/REST_ENDPOINTS.md` — if your endpoint isn't in it, the catalog line broke the parser regex (step 2), which is the single most common failure here.
 
-**The gate has a second condition that a batch trips: duplication.** `new_duplicated_lines_density` must stay under 3%, and near-identical handlers are the usual cause — see [the table rule](#past-about-four-endpoints-register-them-from-a-table). Structurally identical one-line catalog entries also register as duplicated; that is what a data table looks like and is not worth deforming, but it means the budget for duplicated handler bodies is smaller than it looks.
-
-**Then check the coverage gate, before you push.** CI runs a SonarCloud quality gate that fails the PR at **under 80% coverage of new code**, and a write-endpoint change lands squarely in its blast radius: the handler's success path cannot be covered by any test in this repo (see [The coverage gate](references/write-endpoints.md#the-coverage-gate)), so the op you extracted has to carry the ratio. Two things make this wasteful to get wrong — the gate blends **lines and branches**, so a per-file line reading looks like it passes when it does not, and each CI round trip is ~12 minutes. Measure locally instead; the recipe is in that section.
+**Then measure coverage of the new code, locally.** CI does not check coverage, so nothing stops a PR that leaves its new lines untested; keep them at 80% or more, lines and branches together. A write-endpoint change is the hard case: the handler's success path cannot be covered by any test in this repo (see [Coverage](references/write-endpoints.md#coverage)), so the op you extracted has to carry the ratio. A per-file line reading overstates it, because it ignores branches and counts old lines too; the recipe in that section measures only what the branch added.
 
 ### 8. Report
 
@@ -203,7 +201,7 @@ Added <mcpToolName> → <METHOD> <path>
 
 Typecheck: <pass | N errors>
 Tests: <pass | N failing>
-New-code coverage: <N>%   ← gate is 80%, lines + branches (POST changes only)
+New-code coverage: <N>%   ← aim for 80%+, lines + branches (POST changes only)
 
 Declined (if any):
   <toolName>   ← why: no large body, no pipeline / destructive, no sign-off
@@ -279,7 +277,7 @@ Ship the result as its own PR — see [One pass, one PR](#one-pass-one-pr).
 
 ### Past about four endpoints, register them from a table
 
-Hand-writing N handlers that differ only in schema, op, status code and response shape **fails the duplication gate**, and it is the wrong shape anyway. Nineteen Docs write handlers measured **23% duplicated** (88 of 384 new lines), taking the project over the 3% `new_duplicated_lines_density` threshold and failing the PR after everything else was green.
+Hand-writing N handlers that differ only in schema, op, status code and response shape is the wrong shape: nineteen Docs write handlers came out **23% duplicated** (88 of 384 new lines), nineteen copies of the same catch block.
 
 Write it as a table of route descriptors plus one generic handler:
 
@@ -304,7 +302,7 @@ for (const route of WRITE_ROUTES) {
 }
 ```
 
-**Inject the ops module; do not give each row its own `load: async () => { const m = await import(…); … }`.** That wrapper is 4 lines of identical ceremony per route, and it is exactly what the duplication gate counts — 24 copies measured as 7.5% duplicated new lines in `webServer.ts`, which dropped to 4.1% (and 85 fewer lines) once the handler imported the module once and passed it in. Type safety is unchanged: `typeof import(...)` still makes a renamed export a compile error, and the per-row `as string` casts on path params disappear with it.
+**Inject the ops module; do not give each row its own `load: async () => { const m = await import(…); … }`.** That wrapper is 4 lines of identical ceremony per route — 24 copies were 7.5% of `webServer.ts`'s new lines, and importing the module once and passing it in removed 85 lines. Type safety is unchanged: `typeof import(...)` still makes a renamed export a compile error, and the per-row `as string` casts on path params disappear with it.
 
 Three things get better, not just the duplication number:
 
@@ -353,18 +351,7 @@ Practicalities, in the order they bite:
 - **A per-route `express.json({ limit })` next to the handler** — never runs, and the endpoint 413s at 100 kb anyway. The limit belongs in `REST_LARGE_BODY_PREFIXES`; see `references/write-endpoints.md`.
 - **Upstream 404/403 answered as 500** — the provider's MCP helpers may wrap errors in a `UserError` that drops `err.code`, which is what `sendUpstreamError` reads. Check before reusing a helper.
 - **An MCP `UserError` mapped straight to 400** — those helpers raise `UserError` for the provider's own 404s too, so a missing record gets reported as "fix your request". Branch on whether a numeric status survived.
-- **The duplication gate fails the PR** — N near-identical handlers. Expected past about four endpoints; use the table (see Batch mode) rather than writing them out and refactoring afterwards.
 - **An endpoint shipped for a tool that throws** — check `NOT_IMPLEMENTED` in `e2e/tools.ts` (step 1).
-- **The Sonar new-code coverage gate fails the PR** — expected on a write change, and not a reason to waive the gate. Cover the extracted op; see `references/write-endpoints.md`.
-- **The GitHub `sonarcloud` check says SUCCESS while the quality gate is ERROR.** The check only reports that the scan ran. Read the gate, and get the per-file breakdown before fixing anything:
-
-  ```bash
-  curl -s "https://sonarcloud.io/api/qualitygates/project_status?projectKey=<key>&pullRequest=<n>"
-  curl -s "https://sonarcloud.io/api/measures/component_tree?component=<key>&pullRequest=<n>&metricKeys=new_lines,new_duplicated_lines_density&qualifiers=FIL&ps=100"
-  ```
-
-  Confirm **which commit was analysed** (`api/project_pull_requests/list`) — a reading taken a minute after pushing is still the previous commit's, and chasing a stale number is its own time sink. For the issue list, pass **`&resolved=false`**: `api/issues/search` returns fixed issues alongside open ones, so a pass that resolved 10 of 13 still reports 13 and reads as though nothing was fixed. The resolved ones come back with `line: null`, which is the only hint in the default output.
-- **The duplication gate can be mathematically unreachable, and the catalog is why.** `src/restCatalog.ts` measures ~97% duplicated new lines: 50 structurally identical one-line entries is precisely what copy-paste detection exists to flag. Do the arithmetic before grinding — at 1673 new lines a 3% threshold allows 50 duplicated lines, and the catalog alone was 75, so no handler refactor could pass. At that point the only honest options are a `sonar.cpd.exclusions` entry, a won't-fix, or an override; raise it as a decision rather than deforming a data table whose field order three build scripts parse with a regex. (Real handler duplication is still worth removing: injecting the ops module once instead of per table row took `webServer.ts` from 7.5% to 4.1% and removed 85 lines.)
 - **Tests that pass but never EXIT hang the whole suite, and it reads like anything but that.** With no local Redis, `oauthServer.ts`'s `getRedis()` leaves an `ioredis` client retrying, so `auth/exchangeAuthCode` and `auth/oauthProxy` print `ok` for every assertion and then hold the event loop open — `node --test` waits on them indefinitely. Two things disguise it: stdout is block-buffered when redirected, so a dead run sits at a plausible ~67 lines and looks like slow progress; and the giveaway is the parent at 0% CPU with **no child workers**. Before suspecting your change, reproduce on unmodified main (`git checkout --detach origin/main`) — if it reproduces there, it is the environment, not the diff. To get a verdict anyway, run each file separately with a hard timeout and treat a `not ok` line as the only failure signal.
 - **`data/*.json` grows without bound and widens the corruption race.** Every run appends to `data/mcp-connections.json` and nothing prunes it; at 1340 entries / 652 KB, ~120 concurrent test processes read-modify-writing it reliably interleave into `Unexpected non-whitespace character after JSON`, or hang. It is gitignored scratch — truncate to `[]` rather than debugging a handler.
 
@@ -376,10 +363,10 @@ add-rest-endpoint/
 ├── references/
 │   ├── route-pattern.md          ← canonical Express handler shape + helpers
 │   └── write-endpoints.md        ← POST rules: Zod body validation, body-size prefixes,
-│                                   op extraction, upstream status, the coverage gate
+│                                   op extraction, upstream status, coverage
 └── assets/
     ├── scripts/
-    │   └── new-code-coverage.py  ← local read of the Sonar new-code gate (lines + branches)
+    │   └── new-code-coverage.py  ← coverage of the lines this branch added (lines + branches)
     └── templates/
         ├── google-route.ts.tmpl
         ├── third-party-route.ts.tmpl

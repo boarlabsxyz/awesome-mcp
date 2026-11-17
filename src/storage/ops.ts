@@ -76,13 +76,22 @@ export function storageLimits() {
 const LIST_CAP = 20;
 
 /**
+ * A UserError that also carries the HTTP status the REST plane answers with
+ * (404 for a missing collection or record, 503 without a database). The MCP
+ * side ignores it; on REST every other UserError is the caller's mistake, 400.
+ */
+function statusError(status: 404 | 503, message: string): UserError {
+  return Object.assign(new UserError(message), { code: status });
+}
+
+/**
  * The pool, or an error that says why there is none. Never an empty answer:
  * "no collections" and "no database" must not look the same.
  */
 function requirePool(deps: StorageOpsDeps): StoragePool {
   const pool = deps.pool();
   if (!pool) {
-    throw new UserError('Storage is unavailable: this service has no database connection (DATABASE_URL and REDIS_URL must both be set).');
+    throw statusError(503, 'Storage is unavailable: this service has no database connection (DATABASE_URL and REDIS_URL must both be set).');
   }
   return pool;
 }
@@ -95,7 +104,7 @@ function requireUser(userId: number | undefined): number {
 async function requireCollection(q: Queryable, userId: number, name: string, forUpdate = false): Promise<Collection> {
   const collection = await getCollection(q, userId, name, forUpdate);
   if (!collection) {
-    throw new UserError(`There is no collection "${name}". Call listCollections to see the ones that exist.`);
+    throw statusError(404, `There is no collection "${name}". Call listCollections to see the ones that exist.`);
   }
   return collection;
 }
@@ -425,7 +434,7 @@ export async function opGetRecord(userId: number | undefined, args: { collection
   const c = await requireCollection(pool, uid, args.collection);
   const ref = recordRef(c, args);
   const row = await getRecord(pool, c.id, ref);
-  if (!row) throw new UserError(`No record with ${describeRef(ref)} in "${c.name}".`);
+  if (!row) throw statusError(404, `No record with ${describeRef(ref)} in "${c.name}".`);
   return present(row, c, deps.now());
 }
 
@@ -451,7 +460,7 @@ export async function opUpdateRecord(
     if (unknownUnset.length) throw new UserError(`unset names field(s) the schema does not have: ${unknownUnset.join(', ')}.`);
 
     const current = await getRecord(q, c.id, ref);
-    if (!current) throw new UserError(`No record with ${describeRef(ref)} in "${c.name}".`);
+    if (!current) throw statusError(404, `No record with ${describeRef(ref)} in "${c.name}".`);
     const merged: Record<string, unknown> = { ...current.data, ...set };
     for (const f of unset) delete merged[f];
     const validation = validateRecord(c.fields, merged);
@@ -474,7 +483,7 @@ export async function opUpdateRecord(
     }
 
     const row = await updateRecord(q, c.id, current.id, validation.data, key, bytes);
-    if (!row) throw new UserError(`Not updated — the record with ${describeRef(ref)} no longer exists (deleted concurrently?).`);
+    if (!row) throw statusError(404, `Not updated — the record with ${describeRef(ref)} no longer exists (deleted concurrently?).`);
     return present(row, c, deps.now());
   });
 }

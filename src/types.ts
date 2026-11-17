@@ -96,7 +96,17 @@ export type ParagraphStyleArgs = z.infer<typeof ParagraphStyleParameters>;
 
 // --- Combination Schemas for Tools ---
 
+// Shared by every editing tool that can pin its write to the revision it read.
+export const RequiredRevisionIdParameter = z.string().min(1).optional()
+.describe('Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that '
++ 'revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits.');
+
+export const DocTabIdParameter = z.string().optional()
+.describe('Optional tab ID (from listDocumentTabs). Defaults to the first tab.');
+
 export const ApplyTextStyleToolParameters = DocumentIdParameter.extend({
+tabId: DocTabIdParameter,
+requiredRevisionId: RequiredRevisionIdParameter,
 // Target EITHER by range OR by finding text
 target: z.union([
 RangeParameters,
@@ -110,6 +120,8 @@ styleArgs => Object.values(styleArgs).some(v => v !== undefined),
 export type ApplyTextStyleToolArgs = z.infer<typeof ApplyTextStyleToolParameters>;
 
 export const ApplyParagraphStyleToolParameters = DocumentIdParameter.extend({
+tabId: DocTabIdParameter,
+requiredRevisionId: RequiredRevisionIdParameter,
 // Target EITHER by range OR by finding text (tool logic needs to find paragraph boundaries)
 target: z.union([
 RangeParameters, // User provides paragraph start/end (less likely)
@@ -137,16 +149,21 @@ export const SharedDriveParameters = z.object({
 
 // --- Batch Operation Schema ---
 
+// Indices are per tab, so an index-based operation names the tab it counts in.
+const batchTabId = z.string().optional().describe('Optional tab ID the indices refer to. Defaults to the first tab.');
+
 const InsertTextOp = z.object({
   type: z.literal('insert_text'),
   index: z.number().int().min(1).describe('1-based index where text will be inserted.'),
   text: z.string().min(1).describe('The text to insert.'),
+  tabId: batchTabId,
 });
 
 const DeleteTextOp = z.object({
   type: z.literal('delete_text'),
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+  tabId: batchTabId,
 });
 
 const ReplaceTextOp = z.object({
@@ -154,6 +171,7 @@ const ReplaceTextOp = z.object({
   findText: z.string().min(1).describe('Text to find.'),
   replaceText: z.string().describe('Replacement text.'),
   matchCase: z.boolean().optional().default(false).describe('Case-sensitive match.'),
+  tabId: z.string().optional().describe('Optional tab ID to restrict the replacement to. Defaults to every tab.'),
 });
 
 const FormatTextOp = z.object({
@@ -161,6 +179,7 @@ const FormatTextOp = z.object({
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
   style: TextStyleParameters,
+  tabId: batchTabId,
 });
 
 const UpdateParagraphStyleOp = z.object({
@@ -168,6 +187,7 @@ const UpdateParagraphStyleOp = z.object({
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
   style: ParagraphStyleParameters,
+  tabId: batchTabId,
 });
 
 const InsertTableOp = z.object({
@@ -175,11 +195,13 @@ const InsertTableOp = z.object({
   index: z.number().int().min(1).describe('1-based index where table will be inserted.'),
   rows: z.number().int().min(1).max(20).describe('Number of rows (1-20).'),
   columns: z.number().int().min(1).max(20).describe('Number of columns (1-20).'),
+  tabId: batchTabId,
 });
 
 const InsertPageBreakOp = z.object({
   type: z.literal('insert_page_break'),
   index: z.number().int().min(1).describe('1-based index where page break will be inserted.'),
+  tabId: batchTabId,
 });
 
 const FindReplaceOp = z.object({
@@ -187,12 +209,37 @@ const FindReplaceOp = z.object({
   findText: z.string().min(1).describe('Text to find.'),
   replaceText: z.string().describe('Replacement text.'),
   matchCase: z.boolean().optional().default(false).describe('Case-sensitive match.'),
+  tabId: z.string().optional().describe('Optional tab ID to restrict the replacement to. Defaults to every tab.'),
 });
+
+// Google's bullet presets. The NUMBERED_* ones make a numbered list; the default
+// stays the disc/circle/square bullets every existing caller already gets.
+export const BULLET_PRESETS = [
+  'BULLET_DISC_CIRCLE_SQUARE',
+  'BULLET_DIAMONDX_ARROW3D_SQUARE',
+  'BULLET_CHECKBOX',
+  'BULLET_ARROW_DIAMOND_DISC',
+  'BULLET_STAR_CIRCLE_SQUARE',
+  'BULLET_ARROW3D_CIRCLE_SQUARE',
+  'BULLET_LEFTTRIANGLE_DIAMOND_DISC',
+  'BULLET_DIAMONDX_HOLLOWDIAMOND_SQUARE',
+  'BULLET_DIAMOND_CIRCLE_SQUARE',
+  'NUMBERED_DECIMAL_ALPHA_ROMAN',
+  'NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS',
+  'NUMBERED_DECIMAL_NESTED',
+  'NUMBERED_UPPERALPHA_ALPHA_ROMAN',
+  'NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL',
+  'NUMBERED_ZERODECIMAL_ALPHA_ROMAN',
+] as const;
 
 const CreateBulletListOp = z.object({
   type: z.literal('create_bullet_list'),
+  bulletPreset: z.enum(BULLET_PRESETS).optional()
+    .describe('List style. NUMBERED_DECIMAL_ALPHA_ROMAN (1. a. i.) makes a numbered list; BULLET_CHECKBOX a checklist. '
+      + 'Defaults to BULLET_DISC_CIRCLE_SQUARE.'),
   startIndex: z.number().int().min(1).describe('Start index (inclusive).'),
   endIndex: z.number().int().min(1).describe('End index (exclusive).'),
+  tabId: batchTabId,
 });
 
 export const BatchOperationSchema = z.discriminatedUnion('type', [
@@ -464,6 +511,61 @@ const InsertDimensionOp = z.object({
   inheritFromBefore: z.boolean().optional().describe('Inherit formatting from the row/column BEFORE the insertion point instead of the one after. Cannot be true when startIndex is 1 — nothing precedes the first row/column.'),
 });
 
+const AlignmentOp = z.object({
+  type: z.literal('alignment'),
+  range: z.string().describe('A1 notation range (e.g., "Sheet1!A1:D1").'),
+  horizontalAlignment: z.enum(['LEFT', 'CENTER', 'RIGHT']).optional(),
+  verticalAlignment: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional(),
+  wrapStrategy: z.enum(['OVERFLOW_CELL', 'LEGACY_WRAP', 'CLIP', 'WRAP']).optional()
+    .describe('WRAP wraps long text onto new lines; CLIP cuts it at the cell edge; OVERFLOW_CELL spills into empty neighbours.'),
+});
+
+// What a cell accepts. `clear` removes the rule from the range (values stay).
+const DataValidationRuleSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('dropdown'),
+    values: z.array(z.string().min(1)).min(1).max(500).describe('The dropdown choices.'),
+  }),
+  z.object({
+    kind: z.literal('dropdownFromRange'),
+    sourceRange: z.string().describe('A1 range whose values are the choices, e.g. "Lists!A2:A20". Quote a tab name with spaces: "\'My Tab\'!A2:A20".'),
+  }),
+  z.object({
+    kind: z.literal('checkbox'),
+    checkedValue: z.string().optional().describe('Optional custom value stored when ticked (default TRUE).'),
+    uncheckedValue: z.string().optional().describe('Optional custom value stored when unticked (default FALSE). Needs checkedValue.'),
+  }),
+  z.object({
+    kind: z.literal('number'),
+    condition: z.enum(['NUMBER_GREATER', 'NUMBER_GREATER_THAN_EQ', 'NUMBER_LESS', 'NUMBER_LESS_THAN_EQ', 'NUMBER_EQ', 'NUMBER_NOT_EQ', 'NUMBER_BETWEEN', 'NUMBER_NOT_BETWEEN']),
+    value: z.number(),
+    value2: z.number().optional().describe('Upper bound, required for the BETWEEN conditions.'),
+  }),
+  z.object({
+    kind: z.literal('customFormula'),
+    formula: z.string().startsWith('=').describe('Formula that must be TRUE for the input, relative to the top-left cell, e.g. "=LEN(A2)<=50".'),
+  }),
+  z.object({ kind: z.literal('clear') }),
+]);
+
+const DataValidationOp = z.object({
+  type: z.literal('dataValidation'),
+  range: z.string().describe('A1 notation range the rule applies to.'),
+  rule: DataValidationRuleSchema,
+  strict: z.boolean().optional().default(true).describe('Reject invalid input (true) or only flag it with a warning (false).'),
+  inputMessage: z.string().optional().describe('Help text shown when the cell is selected.'),
+});
+
+const AddChartOp = z.object({
+  type: z.literal('addChart'),
+  chartType: z.enum(['COLUMN', 'BAR', 'LINE', 'AREA', 'SCATTER', 'PIE']),
+  sourceRange: z.string().describe('A1 range with a header row: first column = categories (X), each further column = one series. PIE takes exactly two columns.'),
+  title: z.string().optional(),
+  anchorCell: z.string().optional().describe('A1 cell for the chart\'s top-left corner, e.g. "Sheet1!H2". Defaults to the right of the data, leaving one blank column. Ignored with newSheet.'),
+  newSheet: z.boolean().optional().describe('Put the chart on its own new sheet instead of over the grid.'),
+  legendPosition: z.enum(['BOTTOM_LEGEND', 'TOP_LEGEND', 'LEFT_LEGEND', 'RIGHT_LEGEND', 'NO_LEGEND']).optional().default('BOTTOM_LEGEND'),
+});
+
 export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
   NumberFormatOp,
   TextStyleOp,
@@ -481,6 +583,9 @@ export const BatchUpdateOperationSchema = z.discriminatedUnion('type', [
   AddSheetOp,
   AppendDimensionOp,
   InsertDimensionOp,
+  AlignmentOp,
+  DataValidationOp,
+  AddChartOp,
 ]);
 
 export type BatchUpdateOperation = z.infer<typeof BatchUpdateOperationSchema>;

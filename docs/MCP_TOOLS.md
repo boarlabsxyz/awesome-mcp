@@ -7,18 +7,18 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 ## Index
 
 - [Shared (opt-in per server)](#shared-opt-in-per-server-) (2)
-- [Google Docs](#google-docs) (38)
-- [Google Sheets](#google-sheets) (12)
+- [Google Docs](#google-docs) (45)
+- [Google Sheets](#google-sheets) (14)
 - [Google Calendar](#google-calendar) (6)
-- [Google Drive](#google-drive) (15)
-- [Gmail](#gmail) (14)
+- [Google Drive](#google-drive) (19)
+- [Gmail](#gmail) (18)
 - [Google Slides](#google-slides) (6)
-- [ClickUp](#clickup) (48)
+- [ClickUp](#clickup) (49)
 - [Slack (bot)](#slack-bot-) (9)
 - [Slack (user)](#slack-user-) (17)
-- [Outline](#outline) (27)
-- [PeopleForce](#peopleforce) (45)
-- [PeopleForce v4](#peopleforce-v4) (44)
+- [Outline](#outline) (43)
+- [PeopleForce](#peopleforce) (50)
+- [PeopleForce v4](#peopleforce-v4) (46)
 - [HubSpot](#hubspot) (23)
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
@@ -27,19 +27,20 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Supabase](#supabase) (30)
 - [Admin (usage analytics)](#admin-usage-analytics-) (6)
 - [Storage](#storage) (10)
+- [Sandbox](#sandbox) (6)
 
 ## Shared (opt-in per server)
 
-Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 16 of 20 servers; not on PeopleForce v4, Supabase, Admin (usage analytics), Storage).
+Source: `src/sharedTools/mintRestBearerForCurl.ts`, `src/sharedTools/listRestEndpoints.ts` — 2 tools (registered by 17 of 21 servers; only listRestEndpoints on Sandbox; not on PeopleForce v4, Supabase, Admin (usage analytics)).
 
 | Tool | Description | REST |
 |---|---|---|
 | `mintRestBearerForCurl` | ESCAPE HATCH — do NOT call this as a routine auth step. The regular MCP tools (readGoogleDoc, listGoogleDocs, listChannels, etc.) work without any token; you are already authenticated via the MCP session. Only call this if YOU (the client) can run shell commands like curl, and you specifically want to fetch a large/bulk response straight to disk instead of through the LLM context window. The minted bearer is valid 5 minutes against GET <base>/api/v1/* (see listRestEndpoints). If you cannot exec shell, this token is useless to you — skip it. The bearer acts as THIS connector's account: with several connections to one service (two Google accounts), mint it from the connector whose account you need. | — |
-| `listRestEndpoints` | ESCAPE HATCH companion to mintRestBearerForCurl — only useful if YOU (the client) can run shell commands like curl. The regular MCP tools work without any of this; do NOT call this as a routine discovery step. Lists REST data-plane endpoints under <base>/api/v1/* so a shell-capable client can move bulk payloads without them crossing the LLM context window: GET fetches large responses straight to disk, and POST sends a large request body (or chains a write into a curl \| jq pipeline) without pasting it through a tool call. Optional `service` narrows the result to one provider. | — |
+| `listRestEndpoints` | ESCAPE HATCH companion to mintRestBearerForCurl — only useful if YOU (the client) can run shell commands like curl, or code that calls the API (the Sandbox MCP's runCode). The regular MCP tools work without any of this; do NOT call this as a routine discovery step. Lists REST data-plane endpoints under <base>/api/v1/* so a shell-capable client can move bulk payloads without them crossing the LLM context window: GET fetches large responses straight to disk, and POST sends a large request body (or chains a write into a curl \| jq pipeline) without pasting it through a tool call. Without `service` it returns only an index of services and their endpoint counts; call it again with one `service` for its paths. | — |
 
 ## Google Docs
 
-Source: `src/google-docs/server.ts` — 38 tools.
+Source: `src/google-docs/server.ts` — 45 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -47,14 +48,21 @@ Source: `src/google-docs/server.ts` — 38 tools.
 | `searchGoogleDocs` | Searches for Google Documents by name, content, or other criteria across My Drive and shared drives. | `GET /api/v1/docs?q={query}` |
 | `getRecentGoogleDocs` | Gets the most recently modified Google Documents from My Drive and shared drives. | `GET /api/v1/docs/recent` |
 | `exportDocToPdf` | Exports a Google Doc as a PDF file and saves it to Google Drive. Returns the PDF file ID, name, and link. | `POST /api/v1/docs/{documentId}/export/pdf` |
-| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. | `GET /api/v1/docs/{documentId}` |
+| `readGoogleDoc` | Reads the content of a specific Google Document, optionally returning structured data. The text format ends with the document's revisionId (for requiredRevisionId); json includes it; for markdown use inspectDocStructure. | `GET /api/v1/docs/{documentId}` |
 | `listDocumentTabs` | Lists all tabs in a Google Document, including their hierarchy, IDs, and structure. | `GET /api/v1/docs/{documentId}/tabs` |
+| `createDocumentTab` | Adds a new tab to a Google Doc, optionally nested under another tab. Returns the new tab ID. | `POST /api/v1/docs/{documentId}/tabs` |
+| `updateDocumentTab` | Renames a document tab, changes its emoji icon, or moves it among its sibling tabs. | `POST /api/v1/docs/{documentId}/tabs/{tabId}/update` |
+| `deleteDocumentTab` | Deletes a document tab with all its content and all tabs nested under it. Not reversible through the API. | — |
 | `appendToGoogleDoc` | Appends text to the very end of a specific Google Document or tab. Equivalent to insertText at the document end; use this when you do not know the end index. | `POST /api/v1/docs/{documentId}/append` |
 | `insertText` | Inserts text at a specific 1-based index within the document body or a specific tab. For end-of-document inserts where you do not have an index, prefer appendToGoogleDoc. | `POST /api/v1/docs/{documentId}/text` |
 | `deleteRange` | Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab. | `POST /api/v1/docs/{documentId}/ranges/delete` |
 | `applyTextStyle` | Applies character-level formatting to a specific range or found text. Supported style keys: bold, italic, underline, strikethrough, fontSize, fontFamily, foregroundColor, backgroundColor, link. | `POST /api/v1/docs/{documentId}/text-style` |
 | `applyParagraphStyle` | Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range. | `POST /api/v1/docs/{documentId}/paragraph-style` |
 | `insertTable` | Inserts a new table with the specified dimensions at a given index. | `POST /api/v1/docs/{documentId}/tables` |
+| `modifyTableStructure` | Adds rows or columns to an existing table, or merges/unmerges a block of cells. Find the table start index with inspectDocStructure. | `POST /api/v1/docs/{documentId}/tables/structure` |
+| `deleteTableRowOrColumn` | Deletes one row or column of an existing table, with its content. A merged cell spanning several rows/columns deletes all of them. | — |
+| `formatTableCells` | Formats table cells natively: background, vertical alignment, padding, borders, row height and column width. Omit row/column for the whole table. | `POST /api/v1/docs/{documentId}/tables/cell-style` |
+| `createFootnote` | Adds a real footnote: inserts the reference number at an index in the body and writes the footnote text. | `POST /api/v1/docs/{documentId}/footnotes` |
 | `editTableCell` | NOT IMPLEMENTED — always throws. Editing table cells requires non-trivial index calculation that has not been built yet. Use batchUpdateDoc with raw insert/delete requests if you need to modify table contents. | — |
 | `insertPageBreak` | Inserts a page break at the specified index. | `POST /api/v1/docs/{documentId}/page-breaks` |
 | `insertImageFromUrl` | Inserts an inline image into a Google Document from a publicly accessible URL. | `POST /api/v1/docs/{documentId}/images/from-url` |
@@ -79,12 +87,12 @@ Source: `src/google-docs/server.ts` — 38 tools.
 | `findAndReplace` | Finds all occurrences of a text string in a Google Doc and replaces them. Returns the number of replacements made. | `POST /api/v1/docs/{documentId}/find-replace` |
 | `inspectDocStructure` | Analyzes and returns the structure of a Google Doc: paragraph/table/section counts, headers/footers presence, tab hierarchy. Use detailed mode for element-by-element listing. | `GET /api/v1/docs/{documentId}/structure` |
 | `importDocx` | Converts a .docx file already in Google Drive into a Google Doc. Drive auto-converts the format. Returns the new Google Doc ID and link. | `POST /api/v1/docs/import/docx` |
-| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly. | `POST /api/v1/docs/{documentId}/batchUpdate` |
+| `batchUpdateDoc` | Executes multiple document operations in a single batch. Supports: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list (bulletPreset NUMBERED_* for numbered lists). Each operation takes an optional tabId. Index-based operations are automatically sorted in descending order to prevent index shifting. Set suggestMode to propose the whole batch as tracked suggestions instead of editing directly. | `POST /api/v1/docs/{documentId}/batchUpdate` |
 | `importToGoogleDoc` | Import content (text, HTML, or markdown) into a new Google Doc. Google Drive auto-converts the content to Google Docs format. | `POST /api/v1/docs/import` |
 
 ## Google Sheets
 
-Source: `src/google-sheets/server.ts` — 12 tools.
+Source: `src/google-sheets/server.ts` — 14 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -99,7 +107,9 @@ Source: `src/google-sheets/server.ts` — 12 tools.
 | `findRowByValue` | Search a column for a specific value and return the 1-based row number where it was found. | `GET /api/v1/sheets/{spreadsheetId}/search` |
 | `readRowByField` | Look up a row by searching a column for a value, then return the row as a named JSON object using header names from row 1. | `GET /api/v1/sheets/{spreadsheetId}/rows/{rowNumber}` |
 | `updateCellByFieldName` | Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names. | — |
-| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab's current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead. | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
+| `batchUpdateSpreadsheet` | Apply multiple formatting and sheet-lifecycle operations to a Google Spreadsheet in a single atomic batch. Supports number formats, text styling, background colors, borders, freezing, conditional formatting, cell merging, alignment and text wrapping, data validation (dropdowns, checkboxes, number and formula rules), native charts (addChart returns the chart ID), column/row sizing, tab-level ops (rename/reorder/hide/recolor via updateSheetProperties, deleteSheet, duplicateSheet, addSheet), and grid growth (appendDimension adds rows/columns at the end, insertDimension makes room in the middle). Use appendDimension before a writeSpreadsheet that exceeds the tab's current row count — writeSpreadsheet does not grow the grid. A tab added by addSheet in THIS batch cannot be targeted by a later operation in the same batch (it has no sheetId yet), so size it with addSheet rowCount/columnCount instead. | `POST /api/v1/sheets/{spreadsheetId}/batchUpdate` |
+| `deleteSpreadsheetRowsOrColumns` | Deletes whole rows or columns from a tab, with their content; the rest shift up or left. Not reversible through the API. | — |
+| `inspectSpreadsheetCells` | Reads cells without changing them: formula text, raw and displayed values, formatting (format = as set on the cell; effectiveFormat = as displayed, including conditional formatting and defaults), hyperlinks, notes and validation rules. | `GET /api/v1/sheets/{spreadsheetId}/cells?range={range}` |
 
 ## Google Calendar
 
@@ -110,13 +120,13 @@ Source: `src/google-calendar/server.ts` — 6 tools.
 | `listCalendars` | Lists all calendars accessible to the user. | `GET /api/v1/calendars` |
 | `listEvents` | Lists events from a calendar within a specified date range. Each event with guests also reports YOUR OWN invitation response ("My response"), including needsAction when you have not answered — so invitations needing a reply can be found from one call instead of a getEvent per event. Answer them with updateEvent myResponseStatus. | `GET /api/v1/calendars/{calendarId}/events` |
 | `getEvent` | Gets detailed information about a specific calendar event, including every attendee's response and which attendee is you. Use updateEvent with myResponseStatus to answer the invitation. | `GET /api/v1/calendars/{calendarId}/events/{eventId}` |
-| `createEvent` | Creates a new calendar event. | `POST /api/v1/calendars/{calendarId}/events` |
-| `updateEvent` | Updates an existing calendar event. Only the fields you pass are changed; everything else on the event is preserved. Also ANSWERS AN INVITATION: pass myResponseStatus ("accepted", "tentative" or "declined") to set your own attendee response without touching anyone else's. Note that with the default sendUpdates "none" the organizer is not emailed about your answer — pass sendUpdates "all" if they should be. | `POST /api/v1/calendars/{calendarId}/events/{eventId}` |
+| `createEvent` | Creates a new calendar event, or a recurring series with recurrence (RRULE) and timeZone. | `POST /api/v1/calendars/{calendarId}/events` |
+| `updateEvent` | Updates an existing calendar event. Only the fields you pass are changed; everything else on the event is preserved. addAttendees/removeAttendees edit the guest list, keeping everyone else and their responses. Also ANSWERS AN INVITATION: pass myResponseStatus ("accepted", "tentative" or "declined") to set your own attendee response without touching anyone else's. Note that with the default sendUpdates "none" the organizer is not emailed about your answer — pass sendUpdates "all" if they should be. | `POST /api/v1/calendars/{calendarId}/events/{eventId}` |
 | `deleteEvent` | Deletes a calendar event. | `POST /api/v1/calendars/{calendarId}/events/{eventId}/cancel` |
 
 ## Google Drive
 
-Source: `src/google-drive/server.ts` — 15 tools.
+Source: `src/google-drive/server.ts` — 19 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -135,15 +145,19 @@ Source: `src/google-drive/server.ts` — 15 tools.
 | `getFilePermissions` | Retrieve all permissions on a Google Drive file or folder. Shows who has access, their roles, and sharing status. | `GET /api/v1/drive/files/{fileId}/permissions` |
 | `shareDriveFile` | Share a Google Drive file or folder by creating a permission. Required fields by type: type=user\|group → emailAddress; type=domain → domain; type=anyone → no extra field. | — |
 | `checkPublicAccess` | List the file's direct permissions and report whether an "anyone with link" grant exists on the file itself. Does NOT follow folder-inherited, domain-wide, or shared-drive policies, so a file inside a public folder may report private here. | `GET /api/v1/drive/files/{fileId}/public` |
+| `searchDriveFiles` | Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated. | `GET /api/v1/drive/files?q={query}` |
+| `listDriveChanges` | Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with. | `GET /api/v1/drive/changes` |
+| `uploadDriveFile` | Uploads a file (base64 bytes or text) to Drive, optionally converting it into a Google Doc, Sheet or Slides. Up to 20 MB. | `POST /api/v1/drive/files` |
+| `createDriveUploadSession` | For files too big for uploadDriveFile (over 20 MB): opens a Drive resumable upload and returns its upload URL. A client with a shell then PUTs the file to that URL (curl command included), straight to Google; the response to the PUT is the new file. Treat the URL as a secret: anyone holding it can upload that one file into this Drive for about a week. Nothing is created until the bytes arrive. convertTo is checked against what Drive can import. | `POST /api/v1/drive/upload-sessions` |
 
 ## Gmail
 
-Source: `src/google-gmail/server.ts` — 14 tools.
+Source: `src/google-gmail/server.ts` — 18 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `sendEmail` | Send an email message. | `POST /api/v1/gmail/messages/send` |
-| `draftEmail` | Create a draft email without sending it. | `POST /api/v1/gmail/drafts` |
+| `draftEmail` | Create a draft email without sending it. Set replyToMessageId to draft a reply inside that conversation. | `POST /api/v1/gmail/drafts` |
 | `readEmail` | Read the full content of an email by its message ID. | `GET /api/v1/gmail/messages/{messageId}` |
 | `searchEmails` | Search emails using Gmail query syntax (e.g., "from:user@example.com", "subject:hello", "is:unread", "newer_than:2d"). | `GET /api/v1/gmail/messages?q={query}` |
 | `modifyEmail` | Modify labels on a single email message (add or remove labels). For more than one message, prefer batchModifyEmails. | `POST /api/v1/gmail/messages/{messageId}/modify` |
@@ -156,6 +170,10 @@ Source: `src/google-gmail/server.ts` — 14 tools.
 | `deleteLabel` | Delete a Gmail label. System labels (INBOX, SENT, etc.) cannot be deleted. | `POST /api/v1/gmail/labels/{labelId}/delete` |
 | `getOrCreateLabel` | Get a label by name, creating it if it does not exist. Returns the label ID. | `POST /api/v1/gmail/labels/get-or-create` |
 | `getAttachment` | Download an email attachment. Returns the content as base64-encoded data. | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` |
+| `createFilter` | Creates a Gmail filter for incoming mail: match by sender, recipient, subject or search query; label, archive, mark read or star. Undo with deleteFilter. | `POST /api/v1/gmail/filters` |
+| `listFilters` | Lists the Gmail filters on this account with their criteria and actions. | `GET /api/v1/gmail/filters` |
+| `deleteFilter` | Deletes a Gmail filter so it stops applying to new mail. Mail it already changed is not restored. | — |
+| `getFilter` | Gets one Gmail filter by ID. | `GET /api/v1/gmail/filters/{filterId}` |
 
 ## Google Slides
 
@@ -172,7 +190,7 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 ## ClickUp
 
-Source: `src/clickup/server.ts` — 48 tools.
+Source: `src/clickup/server.ts` — 49 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -216,6 +234,7 @@ Source: `src/clickup/server.ts` — 48 tools.
 | `searchDocs` | Find ClickUp Docs by name, newest first. Pages through the entire workspace, so a recently-created doc is found regardless of how many docs exist. Matching is case-insensitive and token-based: every word in the query must appear in the title, in any order, so "AWESOME Sync" matches "[AWESOME] Sync - 08/15/2026". Omit query to list every doc newest-first. Always reports how many docs were scanned, so an empty result means "not there" rather than "did not look". | `GET /api/v1/clickup/workspaces/{workspaceId}/docs/search` |
 | `createDoc` | Create a new ClickUp Doc in a workspace. Optionally place it inside a Space, Folder, or List by providing parent ID and type. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs` |
 | `getPage` | Get a specific page from a ClickUp Doc, including its full content in markdown. | `GET /api/v1/clickup/docs/{docId}/pages/{pageId}?workspaceId={workspaceId}` |
+| `getAttachmentInfo` | Report the name, type and size of a non-public ClickUp attachment URL (https://t<workspaceId>.p.clickup-attachments.com/…) and a curl to download it. | `GET /api/v1/clickup/workspaces/{workspaceId}/attachments?url={attachmentUrl}` |
 | `createPage` | Create a new page in a ClickUp Doc. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages` |
 | `editPage` | Edit a page in a ClickUp Doc. Can replace, append, or prepend content. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}` |
 | `insertImageIntoPage` | Add an image to a ClickUp Doc page. Provide the image as EXACTLY ONE of imageUrl (a public http(s) URL — strongly preferred) or imageBase64 (base64 bytes, for SMALL images only — the payload consumes the calling model context, so use imageUrl whenever a public URL exists). The image is re-hosted (recompressed to WebP) and embedded as markdown (append by default). ClickUp has no image-upload API for docs, so the image is stored and served by this server — requires DATABASE_URL and IMAGE_PUBLIC_BASE_URL. If imageUrl is already on this server, re-hosting is skipped automatically; pass skipRehost:true to force embedding the given URL as-is. | `POST /api/v1/clickup/workspaces/{workspaceId}/docs/{docId}/pages/{pageId}/images` |
@@ -239,7 +258,7 @@ Source: `src/slack/server.ts` — 9 tools.
 | `replyInThread` | Reply to a thread in a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax. Pass broadcast: true to also send the reply to the channel ("Also send to channel"), which Slack only accepts as the reply is posted. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | `POST /api/v1/slack/channels/{channelId}/threads/{threadTs}` |
 | `editMessage` | Edit a message this bot posted, replacing its content. A bot token can only edit the bot's own messages — Slack refuses anything else. Pass markdownText or blocks to convert a message that was posted as plain text into one with real bullet or numbered lists. WARNING: passing only text on a message that currently has blocks REMOVES those blocks (Slack's own replacement rule), so to keep rendered content re-send it. Get the ts from readChannelHistory or readThreadReplies. | `POST /api/v1/slack/channels/{channelId}/messages/{ts}/edit` |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | `GET /api/v1/slack/users` |
-| `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
+| `openDm` | Open (or retrieve) a DM: 1-on-1 with userId, or a group DM with userIds (2-8 people). Returns the channel ID to use with postMessage. | — |
 
 ## Slack (user)
 
@@ -257,7 +276,7 @@ Source: `src/slack-user/server.ts` — 17 tools.
 | `replyInThread` | Reply to a thread in a Slack channel. For a bulleted or numbered list use markdownText, not text — Slack mrkdwn has no list syntax. Pass broadcast: true to also send the reply to the channel ("Also send to channel"), which Slack only accepts as the reply is posted. Slack renders a preview card for links in the reply; pass unfurlLinks: false and/or unfurlMedia: false to suppress it for this message. Previews can only be suppressed when posting, not removed afterwards. | — |
 | `editMessage` | Edit one of your own Slack messages, replacing its content. Pass markdownText or blocks to convert a message that was posted as plain text into one with real bullet or numbered lists. WARNING: passing only text on a message that currently has blocks REMOVES those blocks (Slack's own replacement rule), so to keep rendered content re-send it. Get the ts from readChannelHistory or readThreadReplies. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
-| `openDm` | Open (or retrieve) a 1-on-1 DM channel with a user. Returns the DM channel ID that can be used with postMessage. | — |
+| `openDm` | Open (or retrieve) a DM: 1-on-1 with userId, or a group DM with userIds (2-8 people). Returns the channel ID to use with postMessage. | — |
 | `subscribeToChannelEvents` | Record interest in a Slack channel's events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in public channels, private channels, DMs, and group DMs; join/leave noise is excluded) and "reaction_added". Slack delivers each of those channel types through a SEPARATE app-level toggle (message.channels / message.groups / message.im / message.mpim), so a workspace with only message.channels enabled records nothing for a DM — this tool names the one your channel needs. Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app's Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced. | — |
 | `listChannelEventSubscriptions` | List the Slack channel-event subscriptions you own, with their event types, match patterns and fail counts. Optionally narrow to one channel. | — |
 | `getChannelEventHistory` | Read the Slack events captured for a channel since you subscribed to it — the exact record of what happened, instead of re-reading the channel and filtering client-side. IMPORTANT: history only accrues from the moment subscribeToChannelEvents was called; the response reports that boundary, and for earlier windows you should fall back to readChannelHistory. If no subscription exists this reports that as a warning rather than an error, so a routine can fall back cleanly. Access rules are enforced on every call, so a channel that has since been denied stops returning history. | — |
@@ -267,7 +286,7 @@ Source: `src/slack-user/server.ts` — 17 tools.
 
 ## Outline
 
-Source: `src/outline/server.ts` — 27 tools.
+Source: `src/outline/server.ts` — 43 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -279,36 +298,52 @@ Source: `src/outline/server.ts` — 27 tools.
 | `getDocumentBacklinks` | Lists all Outline documents that link to a given document. | `GET /api/v1/outline/documents/{documentId}/backlinks` |
 | `listArchivedDocuments` | Lists all archived Outline documents. | `GET /api/v1/outline/documents/archived` |
 | `listTrash` | Lists all Outline documents currently in the trash. | `GET /api/v1/outline/documents/trash` |
-| `createDocument` | Creates a new Outline document in a collection. Optionally publishes immediately, sets an icon, or nests under a parent. | `POST /api/v1/outline/documents` |
-| `updateDocument` | Updates an Outline document. Replaces title/content unless append=true. | `POST /api/v1/outline/documents/{documentId}` |
+| `createDocument` | Creates an Outline document in a collection: published or draft, nested, styled, or from a template (templateId). | `POST /api/v1/outline/documents` |
+| `updateDocument` | Updates an Outline document: replace or append content, edit one passage (findText + text), restyle, or publish a draft. | `POST /api/v1/outline/documents/{documentId}` |
 | `moveDocument` | Moves an Outline document to a different collection and/or under a different parent. Must specify at least one destination. | `POST /api/v1/outline/documents/{documentId}/move` |
 | `archiveDocument` | Archives an Outline document (removes from collections but keeps searchable). Reversible via unarchiveDocument. | `POST /api/v1/outline/documents/{documentId}/archive` |
 | `unarchiveDocument` | Unarchives a previously archived Outline document. | `POST /api/v1/outline/documents/{documentId}/unarchive` |
 | `restoreDocument` | Restores an Outline document from the trash back to active status. | `POST /api/v1/outline/documents/{documentId}/restore` |
+| `unpublishDocument` | Returns a published Outline document to draft, hiding it from its collection until it is published again. | `POST /api/v1/outline/documents/{documentId}/unpublish` |
+| `importHtmlDocument` | Creates an Outline document from HTML with Outline's importer, which also copies its images into the workspace. | `POST /api/v1/outline/documents/import` |
 | `deleteDocument` | Moves an Outline document to trash. Set permanent=true to skip trash and delete immediately (irreversible). | — |
 | `listCollections` | Lists all Outline collections in the workspace. | `GET /api/v1/outline/collections` |
 | `getCollectionStructure` | Returns the hierarchical document tree for an Outline collection. | `GET /api/v1/outline/collections/{collectionId}/structure` |
 | `createCollection` | Creates a new Outline collection. | `POST /api/v1/outline/collections` |
-| `updateCollection` | Updates an Outline collection's name, description, or color. Provide at least one field. | `POST /api/v1/outline/collections/{collectionId}` |
+| `updateCollection` | Updates an Outline collection's name, description, color, or icon. Provide at least one field. | `POST /api/v1/outline/collections/{collectionId}` |
+| `archiveCollection` | Archives an Outline collection with its documents: hidden from sidebar and search, not deleted (undo: restoreCollection). | `POST /api/v1/outline/collections/{collectionId}/archive` |
+| `restoreCollection` | Restores an archived Outline collection and its documents to the sidebar and search. | `POST /api/v1/outline/collections/{collectionId}/restore` |
 | `deleteCollection` | Permanently deletes an Outline collection AND all documents in it. This cannot be undone. | — |
 | `exportCollection` | Starts an async export of an Outline collection. Returns a file operation ID and status. | `POST /api/v1/outline/collections/{collectionId}/export` |
 | `exportAllCollections` | Starts an async export of the entire Outline workspace. Returns a file operation ID and status. | `POST /api/v1/outline/exports` |
 | `listDocumentComments` | Lists comments on an Outline document (paginated). | `GET /api/v1/outline/documents/{documentId}/comments` |
 | `getComment` | Retrieves a single Outline comment by ID. | `GET /api/v1/outline/comments/{commentId}` |
-| `addComment` | Adds a comment on an Outline document, or replies to an existing comment. | `POST /api/v1/outline/documents/{documentId}/comments` |
+| `addComment` | Comments on an Outline document or replies to a comment; with anchorText, comments inline on that text. | `POST /api/v1/outline/documents/{documentId}/comments` |
+| `updateComment` | Replaces the text of an Outline comment. Only its author (or an admin) can edit it. | `POST /api/v1/outline/comments/{commentId}/update` |
+| `resolveComment` | Marks an Outline comment thread resolved (top-level comments only). Reopen it with reopenComment. | `POST /api/v1/outline/comments/{commentId}/resolve` |
+| `reopenComment` | Reopens a resolved Outline comment thread. | `POST /api/v1/outline/comments/{commentId}/reopen` |
+| `deleteComment` | Permanently deletes an Outline comment, and with a top-level comment its replies. Cannot be undone. Only the author (or an admin) can delete. | — |
+| `listUsers` | Lists or searches people in the Outline workspace: name, role, last active, and email where this connection may see it. | `GET /api/v1/outline/users` |
+| `getUser` | Reads one Outline user's profile by ID. | `GET /api/v1/outline/users/{userId}` |
+| `listTemplates` | Lists the Outline templates this connection can use, for createDocument templateId. Needs a recent Outline. | `GET /api/v1/outline/templates` |
+| `getTemplate` | Reads one Outline template with its content. | `GET /api/v1/outline/templates/{templateId}` |
+| `listDocumentRevisions` | Lists an Outline document's history, newest first: when each version was saved and by whom. Paginated. | `GET /api/v1/outline/documents/{documentId}/revisions` |
+| `getDocumentRevision` | Reads one saved version of an Outline document: its content, time and author. | `GET /api/v1/outline/revisions/{revisionId}` |
+| `compareDocumentRevisions` | Line diff of an Outline document between a saved version and a later one or the current text, with who saved each. | `GET /api/v1/outline/documents/{documentId}/compare?from={revisionId}` |
 | `listDocumentAttachments` | Lists attachment IDs referenced in an Outline document by parsing its markdown for /api/attachments.redirect links. | `GET /api/v1/outline/documents/{documentId}/attachments` |
 | `getAttachmentUrl` | Resolves an Outline attachment ID to a signed download URL by following the /api/attachments.redirect redirect. | `GET /api/v1/outline/attachments/{attachmentId}/url` |
+| `uploadAttachment` | Uploads a file to Outline and returns its URL and the markdown to insert with updateDocument (not inserted automatically). | `POST /api/v1/outline/attachments` |
 
 ## PeopleForce
 
-Source: `src/peopleforce/server.ts` — 45 tools.
+Source: `src/peopleforce/server.ts` — 50 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `listEmployees` | Lists PeopleForce employees, 50 per page (server-fixed). Use `page` to paginate. IMPORTANT: omitting `status` returns ACTIVE employees only, not everyone — there is no "all" option, so a full headcount means one pass with status=active plus one with status=inactive. Use status=probation to get just the employees currently on probation — a real server-side segment, so you get that cohort directly instead of filtering the whole directory. It is paginated like every other list: follow `metadata.pagination` and request further pages whenever more are reported. Each employee shows their probation end date and a derived probation state. Any tenant-defined custom fields are included per employee when the list payload carries them (field names and availability vary by tenant). | `GET /api/v1/peopleforce/employees` |
 | `getEmployee` | Retrieves a single PeopleForce employee by ID. Returns full profile: contact, position, department, division, employment type, location, reporting line, and hiring dates. Any tenant-defined custom fields the profile carries are shown under a Custom Fields section (field names and availability vary by tenant; the section is omitted when the record has none). | `GET /api/v1/peopleforce/employees/{employeeId}` |
 | `listDepartments` | Lists all PeopleForce departments, 50 per page (server-fixed). Use `page` to paginate. | `GET /api/v1/peopleforce/departments` |
-| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). PeopleForce's public API does NOT support server-side filtering by employee or date range — fetch pages and filter client-side if needed. | `GET /api/v1/peopleforce/leave-requests` |
+| `listLeaveRequests` | Lists PeopleForce leave requests, 100 per page (server-fixed). Use `page` to paginate; `state` filters by lifecycle state (e.g. "pending", "approved", "declined"). This list cannot filter by employee or dates; for one person's time off in a date range (with public holidays), use getEmployeeAbsences. | `GET /api/v1/peopleforce/leave-requests` |
 | `createLeaveRequest` | Creates a new PeopleForce leave request (time off) for an employee against a specific leave-type ID. Call `listLeaveTypes` first if you need the ID. | `POST /api/v1/peopleforce/leave-requests` |
 | `getLeaveRequest` | Retrieves a single PeopleForce leave request by ID (state, dates, amount, employee, comment). | `GET /api/v1/peopleforce/leave-requests/{leaveRequestId}` |
 | `listLeaveTypes` | Lists PeopleForce leave types (Vacation, Sick, Sabbatical, etc.) with their IDs and time-tracking unit (days/hours). Call this to find the `leaveTypeId` needed for `createLeaveRequest`. | `GET /api/v1/peopleforce/leave-types` |
@@ -320,7 +355,12 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 | `listSkills` | Lists the PeopleForce skills catalog (workspace-wide) with IDs. Server-fixed 50 per page. | `GET /api/v1/peopleforce/skills` |
 | `listCompetencies` | Lists PeopleForce competencies (behavioral/performance dimensions used in reviews) with their IDs. | `GET /api/v1/peopleforce/competencies` |
 | `listTasks` | Lists PeopleForce tasks (onboarding, applicant follow-ups, etc.) with assignee, dates, and completion state. Server-fixed 50 per page. | `GET /api/v1/peopleforce/tasks` |
+| `listHolidays` | Lists the company's public holidays across all holiday policies, with the policy each belongs to. Working-day exceptions are marked. For one employee use listEmployeeHolidays. | `GET /api/v1/peopleforce/holidays` |
+| `listHolidayPolicies` | Lists the holiday policies (usually one per country); each location uses one. | `GET /api/v1/peopleforce/holiday-policies` |
+| `listEmployeeHolidays` | Lists the public holidays that apply to one employee (from their location's holiday policy). Paginated. | `GET /api/v1/peopleforce/employees/{employeeId}/holidays` |
+| `getEmployeeAbsences` | Answers "is this person off on these dates?": their approved leave (and pending, if asked) plus the public holidays of their holiday policy between two dates, in date order. Working-day exceptions and moved holidays are labelled. Says so if it stopped before reading everything. | `GET /api/v1/peopleforce/employees/{employeeId}/absences?from={date}&to={date}` |
 | `listEmployeeLeaveBalances` | Lists a specific employee's current leave balances per leave type (e.g. "how many vacation days does this person have?"). | `GET /api/v1/peopleforce/employees/{employeeId}/leave-balances` |
+| `listEmployeeSalaries` | Lists an employee's salary history (amount, currency, pay period, effective date, compensation component). Only works when the connected Company API key is allowed to view compensation; the answer follows the key's restriction, not the asking person's. | `GET /api/v1/peopleforce/employees/{employeeId}/salaries` |
 | `listEmployeeSkills` | Lists the skills recorded on a specific employee's profile with proficiency level. | `GET /api/v1/peopleforce/employees/{employeeId}/skills` |
 | `listEmployeeDocuments` | Lists documents attached to a specific employee's profile. Payload shape is dumped as JSON since the public API doesn't document a fixed schema for this endpoint. | `GET /api/v1/peopleforce/employees/{employeeId}/documents` |
 | `listEmployeeNotes` | Lists HR notes on a specific employee's profile. Payload dumped as JSON (undocumented shape). | `GET /api/v1/peopleforce/employees/{employeeId}/notes` |
@@ -353,7 +393,7 @@ Source: `src/peopleforce/server.ts` — 45 tools.
 
 ## PeopleForce v4
 
-Source: `src/peopleforce-v4/server.ts` — 44 tools.
+Source: `src/peopleforce-v4/server.ts` — 46 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -363,6 +403,8 @@ Source: `src/peopleforce-v4/server.ts` — 44 tools.
 | `listBirthdays` | List upcoming birthdays. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listWorkAnniversaries` | List upcoming work anniversaries. Defaults upstream to today through 30 days out when no date range is given. | — |
 | `listPersonAssets` | List the company assets assigned to a person (laptops, phones, access cards). | — |
+| `listLeaveRequests` | List leave requests across everyone the service account can see, optionally for some people, states, and a date range (from/to keep requests overlapping it). PeopleForce can only narrow "ending on or after from"; the "to" bound is applied to each returned page here, so a page may show fewer rows than it holds — keep paging to the last page. Needs the Time off permission on the key's role (403 without). | — |
+| `listLeaveBalances` | List current leave balances across everyone the service account can see, optionally for some people or leave types. Needs the Time off permission on the key's role (403 without). | — |
 | `listPersonSalaries` | List a person's salary history (amount, currency, pay period, effective date). Needs Compensation granted on the service account's role — without it the call 403s rather than returning an empty list. | — |
 | `getPersonSalary` | Get a single salary record for a person. Needs Compensation granted on the service account's role. | — |
 | `listPersonLifecycles` | List a person's lifecycle records — hire date, prior experience, last working day, last day in office, and termination type/reason/comment plus rehire eligibility. This is where a departure is dated in detail. | — |
@@ -607,17 +649,30 @@ Source: `src/storage/server.ts` — 10 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `listCollections` | List your storage collections: name, description, schema version, field names, record count, size and last write, plus your quotas. Call this FIRST, before researching anything you may have stored earlier, and before creating a collection: reuse an existing one rather than making a near-duplicate. | — |
-| `describeCollection` | The full schema of one collection: every field with its type, whether it is required, and what it holds; the keyField and ttlDays; record count; and the last 10 migrations with the reason given for each. Read this before inserting or querying, so records match the schema and queries use the right field names. | — |
+| `listCollections` | List your storage collections: name, description, schema version, field names, record count, size and last write, plus your quotas. Call this FIRST, before researching anything you may have stored earlier, and before creating a collection: reuse an existing one rather than making a near-duplicate. | `GET /api/v1/storage/collections` |
+| `describeCollection` | The full schema of one collection: every field with its type, whether it is required, and what it holds; the keyField and ttlDays; record count; and the last 10 migrations with the reason given for each. Read this before inserting or querying, so records match the schema and queries use the right field names. | `GET /api/v1/storage/collections/{collection}` |
 | `createCollection` | Create a collection with a fixed schema. Every record written later must match it exactly: unknown fields are rejected, and the schema changes only through migrateCollection. Give every field a type and a description of what it holds. Use a json field for nested data you only need to keep, not query. Set keyField to a natural identifier (a profile URL, an email) so a later conversation can look a record up and update it instead of duplicating it. Set ttlDays when the data goes stale (e.g. 30 for scraped profiles): older records then read as _stale: true, meaning fetch them again from the source. | — |
 | `migrateCollection` | The only way to change a collection's schema. Operations, applied in order: addField, renameField, removeField (deletes that data), changeField (type, required, description, enum), setOptions (description, keyField, ttlDays). Each change must say what happens to the records already stored: adding a required field to a non-empty collection needs a default, and a type change converts every value or aborts. Defaults to dryRun: true, which changes nothing and shows the records that would change, before and after (a few samples), and any that cannot migrate. Apply with dryRun: false. The migration is all or nothing, and its reason is kept in the history describeCollection shows. Records keep their _updatedAt: reshaping data does not refresh it, so _stale is unchanged. A changeField that changes the type keeps the old description unless you pass a new one. | — |
-| `insertRecords` | Insert up to 500 records into a collection. Each must match the schema (call describeCollection first); one invalid record rejects the whole batch, with the problem in each listed. With onConflict "update", a record whose keyField value already exists replaces that record's data and refreshes its _updatedAt — the way to refresh stale data. Returns the _id of every record written and how many were created and updated. | — |
-| `getRecord` | Get one record by _id or by its keyField value (give one, not both). The record comes with _createdAt, _updatedAt and _ageDays, and _stale when the collection has ttlDays. | — |
-| `findRecords` | Query a collection. where takes conditions on schema fields (eq, ne, gt, gte, lt, lte, in, contains, exists), all of which must hold; contains searches the text of whole records. Filter by freshness with updatedWithinDays; sort by a field, _updatedAt (default) or _createdAt. string and url fields compare and sort as text ("10" before "4"); to compare numbers, migrate the field to number or integer. Returns the total number of matches, one page of records (limit, default 25, max 100) and a nextCursor when there are more. Paging is stable: records written meanwhile do not shift later pages, but total is counted on each call and can change between pages. Keep orderBy and order unchanged while paging. Each record carries _ageDays, and _stale when the collection has ttlDays: re-fetch stale records from their source and update them. | — |
-| `updateRecord` | Update one record, by _id or by keyField value (give one, not both): set merges fields over the record, unset removes optional fields. The result must match the schema. Refreshes the record's _updatedAt. | — |
+| `insertRecords` | Insert up to 500 records into a collection. Each must match the schema (call describeCollection first); one invalid record rejects the whole batch, with the problem in each listed. With onConflict "update", a record whose keyField value already exists replaces that record's data and refreshes its _updatedAt — the way to refresh stale data. Returns the _id of every record written and how many were created and updated. | `POST /api/v1/storage/collections/{collection}/records` |
+| `getRecord` | Get one record by _id or by its keyField value (give one, not both). The record comes with _createdAt, _updatedAt and _ageDays, and _stale when the collection has ttlDays. | `GET /api/v1/storage/collections/{collection}/records/{recordId}` |
+| `findRecords` | Query a collection. where takes conditions on schema fields (eq, ne, gt, gte, lt, lte, in, contains, exists), all of which must hold; contains searches the text of whole records. Filter by freshness with updatedWithinDays; sort by a field, _updatedAt (default) or _createdAt. string and url fields compare and sort as text ("10" before "4"); to compare numbers, migrate the field to number or integer. Returns the total number of matches, one page of records (limit, default 25, max 100) and a nextCursor when there are more. Paging is stable: records written meanwhile do not shift later pages, but total is counted on each call and can change between pages. Keep orderBy and order unchanged while paging. Each record carries _ageDays, and _stale when the collection has ttlDays: re-fetch stale records from their source and update them. | `POST /api/v1/storage/collections/{collection}/find` |
+| `updateRecord` | Update one record, by _id or by keyField value (give one, not both): set merges fields over the record, unset removes optional fields. The result must match the schema. Refreshes the record's _updatedAt. | `POST /api/v1/storage/collections/{collection}/records/{recordId}/update` |
 | `deleteRecords` | Delete up to 500 records, by ids or by keys (keyField values): give one of the two, not both. Cannot be undone. Reports how many were deleted and which of the given ids or keys did not exist. | — |
 | `dropCollection` | Delete a collection with all its records and migration history. Cannot be undone. confirm must repeat the collection name exactly. | — |
 
+## Sandbox
+
+Source: `src/sandbox/server.ts` — 6 tools.
+
+| Tool | Description | REST |
+|---|---|---|
+| `runCode` | Run Python (default; Python 3.14 on Pyodide) or JavaScript in your own sandbox and get stdout, stderr, errors and results (matplotlib figures left open come back as images). Python returns its last expression; JavaScript runs as the body of an async function, so `return` a value. Variables persist between calls while the interpreter lives (JavaScript: on globalThis); files in /home/user, the working directory, persist until the sandbox stops some idle minutes after the last runCode (file calls do not extend it; see sandboxStatus), and the next call starts a fresh one, which the response says. Keep anything worth keeping in the Storage MCP. Each run can call this platform's REST API as you: in Python, `from awesome import api` then `api('GET', '/api/v1/storage/collections')` or `api('POST', path, body)`; in JavaScript, `await api('GET', path)`. The token is revoked when the run ends (if revoking fails, the sandbox is stopped instead, and the token lasts until it expires minutes later). Use listRestEndpoints to see the routes for your connected services. Process data inside the script and print only a summary: output is capped at 20,000 characters each for stdout, stderr and results. Bundled packages, loaded on import: numpy, pandas, matplotlib, scipy, scikit-learn, pyarrow, duckdb, requests, beautifulsoup4, lxml, pyyaml, xlrd, regex, pillow. Pure-Python packages install from PyPI with `import micropip; await micropip.install('name')`; other packages with native code cannot be installed, and there is no shell. The network reaches only this platform's API and PyPI. Python's memory is capped (MemoryError past it). Runs stop after timeoutSec (max 300, and no more than what is left of your daily run time); a run that times out stops its interpreter, so variables are lost but files are kept, and the next run starts a new one. | — |
+| `writeFile` | Write a text file (up to 1 MB) under /home/user in your sandbox, e.g. a CSV you already have, for runCode to process. Starts the sandbox if none is running. For larger data, have a script fetch it over the REST API instead of passing it through this call. | — |
+| `listFiles` | List a directory under /home/user in your running sandbox (default /home/user, the working directory): name, path, type and size of each entry, at most 500. | — |
+| `readFile` | Read a file under /home/user in your running sandbox. Text comes back capped at maxChars, and only that much is read (the response gives the file size); PNG, JPEG, GIF and WebP images up to 1.5 MB come back as images. Other binary files are described, not returned: process them in runCode. | — |
+| `sandboxStatus` | Whether your sandbox is running and when it stops if left idle, plus today's usage against your daily limits (runs and seconds of run time, reset at midnight UTC). | — |
+| `resetSandbox` | Stop your sandbox now, discarding its files and variables. The next runCode starts a fresh one. Use it to clear a stuck state. | — |
+
 ---
 
-**Grand total: 443 tools across 21 sections.**
+**Grand total: 490 tools across 22 sections.**

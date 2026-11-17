@@ -59,6 +59,15 @@ return {}; // Nothing to do
         return response.data;
     } catch (error: any) {
         console.error(`Google API batchUpdate Error for doc ${documentId}:`, error.response?.data || error.message);
+        // A pinned revision that is no longer the latest is a 400 with nothing
+        // written. Named for what it is, so the caller re-reads rather than
+        // retrying the same stale id or reading it as a malformed request.
+        if (error.code === 400 && writeControl?.requiredRevisionId && /revision/i.test(String(error.message))) {
+            throw new UserError(
+                `The document changed after revision ${writeControl.requiredRevisionId} was read, so Google rejected the edit `
+                + 'and nothing was written. Re-read the document for the current revisionId and content, then retry.',
+            );
+        }
         // Translate common API errors to UserErrors
         if (error.code === 400 && error.message.includes('Invalid requests')) {
              // Try to extract more specific info if available
@@ -83,18 +92,41 @@ return {}; // Nothing to do
 
 }
 
+/**
+ * Body content of the first tab, or of `tabId` when given. The legacy
+ * `document.body` only ever holds the first tab, so text lookups that read it
+ * would match the wrong tab's text and hand back indices from another tab.
+ */
+async function getBodyContent(
+    docs: Docs,
+    documentId: string,
+    fields: string,
+    tabId?: string,
+): Promise<docs_v1.Schema$StructuralElement[] | undefined> {
+    if (!tabId) {
+        const res = await docs.documents.get({ documentId, fields });
+        return res.data.body?.content;
+    }
+    const res = await docs.documents.get({ documentId, includeTabsContent: true });
+    const tab = findTabById(res.data, tabId);
+    if (!tab) throw new UserError(`Tab with ID "${tabId}" not found in document.`);
+    if (!tab.documentTab) throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
+    return tab.documentTab.body?.content;
+}
+
 // --- Text Finding Helper ---
 // This improved version is more robust in handling various text structure scenarios
-export async function findTextRange(docs: Docs, documentId: string, textToFind: string, instance: number = 1): Promise<{ startIndex: number; endIndex: number } | null> {
+export async function findTextRange(docs: Docs, documentId: string, textToFind: string, instance: number = 1, tabId?: string): Promise<{ startIndex: number; endIndex: number } | null> {
 try {
-    // Request more detailed information about the document structure
-    const res = await docs.documents.get({
+    // Request more fields to handle various container types (not just paragraphs)
+    const bodyContent = await getBodyContent(
+        docs,
         documentId,
-        // Request more fields to handle various container types (not just paragraphs)
-        fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
-    });
+        'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
+        tabId,
+    );
 
-    if (!res.data.body?.content) {
+    if (!bodyContent) {
         console.warn(`No content found in document ${documentId}`);
         return null;
     }
@@ -138,7 +170,7 @@ try {
         });
     };
 
-    collectTextFromContent(res.data.body.content);
+    collectTextFromContent(bodyContent);
 
     // Sort segments by starting position to ensure correct ordering
     segments.sort((a, b) => a.start - b.start);
@@ -210,6 +242,7 @@ try {
     return null; // Instance not found or mapping failed for all attempts
 } catch (error: any) {
     console.error(`Error finding text "${textToFind}" in doc ${documentId}: ${error.message || 'Unknown error'}`);
+    if (error instanceof UserError) throw error;
     if (error.code === 404) throw upstreamUserError(`Document not found while searching text (ID: ${documentId}).`, error);
     if (error.code === 403) throw upstreamUserError(`Permission denied while searching text in doc ${documentId}.`, error);
     throw new Error(`Failed to retrieve doc for text searching: ${error.message || 'Unknown error'}`);
@@ -218,18 +251,18 @@ try {
 
 // --- Paragraph Boundary Helper ---
 // Enhanced version to handle document structural elements more robustly
-export async function getParagraphRange(docs: Docs, documentId: string, indexWithin: number): Promise<{ startIndex: number; endIndex: number } | null> {
+export async function getParagraphRange(docs: Docs, documentId: string, indexWithin: number, tabId?: string): Promise<{ startIndex: number; endIndex: number } | null> {
 try {
     console.log(`Finding paragraph containing index ${indexWithin} in document ${documentId}`);
 
-    // Request more detailed document structure to handle nested elements
-    const res = await docs.documents.get({
+    const bodyContent = await getBodyContent(
+        docs,
         documentId,
-        // Request more comprehensive structure information
-        fields: 'body(content(startIndex,endIndex,paragraph,table,sectionBreak,tableOfContents))',
-    });
+        'body(content(startIndex,endIndex,paragraph,table,sectionBreak,tableOfContents))',
+        tabId,
+    );
 
-    if (!res.data.body?.content) {
+    if (!bodyContent) {
         console.warn(`No content found in document ${documentId}`);
         return null;
     }
@@ -276,7 +309,7 @@ try {
         return null;
     };
 
-    const paragraphRange = findParagraphInContent(res.data.body.content);
+    const paragraphRange = findParagraphInContent(bodyContent);
 
     if (!paragraphRange) {
         console.warn(`Could not find paragraph containing index ${indexWithin}`);
@@ -288,6 +321,7 @@ try {
 
 } catch (error: any) {
     console.error(`Error getting paragraph range for index ${indexWithin} in doc ${documentId}: ${error.message || 'Unknown error'}`);
+    if (error instanceof UserError) throw error;
     if (error.code === 404) throw upstreamUserError(`Document not found while finding paragraph (ID: ${documentId}).`, error);
     if (error.code === 403) throw upstreamUserError(`Permission denied while accessing doc ${documentId}.`, error);
     throw new Error(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
@@ -299,7 +333,8 @@ try {
 export function buildUpdateTextStyleRequest(
 startIndex: number,
 endIndex: number,
-style: TextStyleArgs
+style: TextStyleArgs,
+tabId?: string,
 ): { request: docs_v1.Schema$Request, fields: string[] } | null {
     const textStyle: docs_v1.Schema$TextStyle = {};
 const fieldsToUpdate: string[] = [];
@@ -329,7 +364,7 @@ const fieldsToUpdate: string[] = [];
 
     const request: docs_v1.Schema$Request = {
         updateTextStyle: {
-            range: { startIndex, endIndex },
+            range: { startIndex, endIndex, ...(tabId ? { tabId } : {}) },
             textStyle: textStyle,
             fields: fieldsToUpdate.join(','),
         }
@@ -341,7 +376,8 @@ const fieldsToUpdate: string[] = [];
 export function buildUpdateParagraphStyleRequest(
 startIndex: number,
 endIndex: number,
-style: ParagraphStyleArgs
+style: ParagraphStyleArgs,
+tabId?: string,
 ): { request: docs_v1.Schema$Request, fields: string[] } | null {
     // Create style object and track which fields to update
     const paragraphStyle: docs_v1.Schema$ParagraphStyle = {};
@@ -405,7 +441,7 @@ style: ParagraphStyleArgs
     // Build the request object
     const request: docs_v1.Schema$Request = {
         updateParagraphStyle: {
-            range: { startIndex, endIndex },
+            range: { startIndex, endIndex, ...(tabId ? { tabId } : {}) },
             paragraphStyle: paragraphStyle,
             fields: fieldsToUpdate.join(','),
         }
@@ -1019,11 +1055,13 @@ export function findTabById(doc: docs_v1.Schema$Document, tabId: string): docs_v
  * Maps a BatchOperation to Google Docs API request(s). Pure function.
  */
 export function mapBatchOperationToRequest(op: BatchOperation): docs_v1.Schema$Request[] {
+    // Sent only when named, so a batch without tabs is byte-identical to before.
+    const tab = op.tabId ? { tabId: op.tabId } : {};
     switch (op.type) {
         case 'insert_text':
             return [{
                 insertText: {
-                    location: { index: op.index },
+                    location: { index: op.index, ...tab },
                     text: op.text,
                 }
             }];
@@ -1031,7 +1069,7 @@ export function mapBatchOperationToRequest(op: BatchOperation): docs_v1.Schema$R
         case 'delete_text':
             return [{
                 deleteContentRange: {
-                    range: { startIndex: op.startIndex, endIndex: op.endIndex }
+                    range: { startIndex: op.startIndex, endIndex: op.endIndex, ...tab }
                 }
             }];
 
@@ -1041,23 +1079,24 @@ export function mapBatchOperationToRequest(op: BatchOperation): docs_v1.Schema$R
                 replaceAllText: {
                     containsText: { text: op.findText, matchCase: op.matchCase ?? false },
                     replaceText: op.replaceText,
+                    ...(op.tabId ? { tabsCriteria: { tabIds: [op.tabId] } } : {}),
                 }
             }];
 
         case 'format_text': {
-            const result = buildUpdateTextStyleRequest(op.startIndex, op.endIndex, op.style);
+            const result = buildUpdateTextStyleRequest(op.startIndex, op.endIndex, op.style, op.tabId);
             return result ? [result.request] : [];
         }
 
         case 'update_paragraph_style': {
-            const result = buildUpdateParagraphStyleRequest(op.startIndex, op.endIndex, op.style);
+            const result = buildUpdateParagraphStyleRequest(op.startIndex, op.endIndex, op.style, op.tabId);
             return result ? [result.request] : [];
         }
 
         case 'insert_table':
             return [{
                 insertTable: {
-                    location: { index: op.index },
+                    location: { index: op.index, ...tab },
                     rows: op.rows,
                     columns: op.columns,
                 }
@@ -1066,15 +1105,15 @@ export function mapBatchOperationToRequest(op: BatchOperation): docs_v1.Schema$R
         case 'insert_page_break':
             return [{
                 insertPageBreak: {
-                    location: { index: op.index },
+                    location: { index: op.index, ...tab },
                 }
             }];
 
         case 'create_bullet_list':
             return [{
                 createParagraphBullets: {
-                    range: { startIndex: op.startIndex, endIndex: op.endIndex },
-                    bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+                    range: { startIndex: op.startIndex, endIndex: op.endIndex, ...tab },
+                    bulletPreset: op.bulletPreset ?? 'BULLET_DISC_CIRCLE_SQUARE',
                 }
             }];
     }

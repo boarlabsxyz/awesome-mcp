@@ -9,6 +9,9 @@
 //      Claude decides sections + primaryTag.
 //   2. Otherwise (or on API failure) fall back to conventional-commit categorization so the
 //      workflow never breaks on network hiccups or a missing key.
+//   3. Either way, connectors whose OAuth scopes grew (--scope-changes, written by
+//      detect-scope-changes.mjs) get an "Action needed" reconnect section. It is added
+//      here rather than left to the model, so it can't be filtered out or reworded away.
 //
 // We use OpenRouter rather than the Anthropic API directly so the same key can be
 // re-routed to a different provider/model in the future by editing OPENROUTER_MODEL below
@@ -29,9 +32,10 @@ const commitsFile = getArg('commits');
 const tasksFile = getArg('tasks');
 const outputDir = getArg('output-dir');
 const dateArg = getArg('date');
+const scopeChangesFile = getArg('scope-changes');
 
 if (!tag || !commitsFile || !outputDir) {
-  console.error('Usage: generate-release-notes.mjs --tag <tag> --commits <file> --tasks <file> --output-dir <dir> [--date <ISO>]');
+  console.error('Usage: generate-release-notes.mjs --tag <tag> --commits <file> --tasks <file> --output-dir <dir> [--date <ISO>] [--scope-changes <file>]');
   process.exit(1);
 }
 
@@ -73,8 +77,22 @@ function parseTasks(file) {
   }
 }
 
+// [{ slug, name, added }] from detect-scope-changes.mjs. A missing or unreadable file
+// means no reconnect section, never a failed release.
+function parseScopeChanges(file) {
+  if (!file) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter(c => c && typeof c.name === 'string' && Array.isArray(c.added) && c.added.length) : [];
+  } catch (err) {
+    console.warn(`Could not read scope changes from ${file}: ${err.message}. No reconnect section.`);
+    return [];
+  }
+}
+
 const commits = parseCommits(commitsFile);
 const tasks = tasksFile ? parseTasks(tasksFile) : new Map();
+const scopeChanges = parseScopeChanges(scopeChangesFile);
 
 // --- Extract CU- ids and clean subjects (shared between AI + fallback paths) ---
 const typeRegex = /^(feat|fix|docs|style|refactor|perf|test|chore|ci|revert)(\(.+?\))?!?:\s*/;
@@ -87,6 +105,46 @@ function extractTaskIds(commit) {
 
 function cleanSubject(subject) {
   return subject.replace(typeRegex, '').replace(/\s*CU-[a-z0-9]+/gi, '').trim();
+}
+
+// --- Connector labels: every bullet says which connector it is about ---
+// The names people see on the dashboard, minus "MCP". 'Website' is the site and dashboard
+// themselves; 'All connectors' is a change every connector gets at once.
+const CONNECTORS = [
+  'Google Docs', 'Google Sheets', 'Google Slides', 'Google Drive', 'Gmail', 'Google Calendar',
+  'Slack', 'ClickUp', 'HubSpot', 'Outline', 'PeopleForce', 'Redmine', 'GitHub',
+  'Browserbase', 'Pinecone', 'Supabase', 'Storage', 'Sandbox', 'Website', 'All connectors',
+];
+
+// Conventional-commit scope -> label, for the fallback path. Unknown scopes get no label.
+const SCOPE_CONNECTORS = {
+  docs: 'Google Docs', 'google-docs': 'Google Docs', sheets: 'Google Sheets', 'google-sheets': 'Google Sheets',
+  slides: 'Google Slides', 'google-slides': 'Google Slides', drive: 'Google Drive', 'google-drive': 'Google Drive',
+  gmail: 'Gmail', 'google-gmail': 'Gmail', calendar: 'Google Calendar', 'google-calendar': 'Google Calendar',
+  slack: 'Slack', 'slack-user': 'Slack', 'slack-bot': 'Slack', clickup: 'ClickUp', hubspot: 'HubSpot',
+  outline: 'Outline', peopleforce: 'PeopleForce', 'peopleforce-v4': 'PeopleForce', redmine: 'Redmine',
+  github: 'GitHub', browserbase: 'Browserbase', pinecone: 'Pinecone', supabase: 'Supabase',
+  storage: 'Storage', sandbox: 'Sandbox', dashboard: 'Website', website: 'Website', ui: 'Website',
+  integrations: 'Website',
+};
+
+function normalizeConnector(name) {
+  if (typeof name !== 'string') return null;
+  return CONNECTORS.find(c => c.toLowerCase() === name.trim().toLowerCase()) ?? null;
+}
+
+// "feat(slack,docs): ..." -> "Slack, Google Docs"
+function connectorFromSubject(subject) {
+  const scope = subject.match(typeRegex)?.[2]?.slice(1, -1);
+  if (!scope) return null;
+  const names = [...new Set(scope.split(',').map(s => SCOPE_CONNECTORS[s.trim().toLowerCase()]).filter(Boolean))];
+  return names.length ? names.join(', ') : null;
+}
+
+// Same-connector bullets next to each other, connectors in order of first appearance.
+function groupByConnector(items) {
+  const order = [...new Set(items.map(it => it.connector ?? ''))];
+  return [...items].sort((a, b) => order.indexOf(a.connector ?? '') - order.indexOf(b.connector ?? ''));
 }
 
 // --- Normalized shape both paths produce ---
@@ -115,6 +173,10 @@ async function generateFromAI() {
     ? [...tasks.entries()].map(([id, t]) => `- CU-${id}: ${t.title}`).join('\n')
     : '(none)';
 
+  const reconnectLines = scopeChanges.length
+    ? scopeChanges.map(c => `- ${c.name}: ${c.added.join(', ')}`).join('\n')
+    : '(none)';
+
   const systemPrompt = [
     'You write release notes for Awesome MCP, a hosted platform that gives Claude and ChatGPT users access to their Google Docs, Sheets, Calendar, Drive, Outline wiki, ClickUp, PeopleForce HR, and other services through MCP.',
     'Readers are non-technical end users. They care about:',
@@ -140,6 +202,9 @@ async function generateFromAI() {
     'Related ClickUp task titles (for extra context; not all are user-facing):',
     taskLines,
     '',
+    'Connectors that ask for new permissions in this release (existing connections must be reconnected to use what they unlock):',
+    reconnectLines,
+    '',
     'Produce ONE JSON object (no markdown fences, no prose before or after) that matches this schema exactly:',
     '{',
     '  "hasUserFacingChanges": boolean,',
@@ -148,7 +213,7 @@ async function generateFromAI() {
     '    {',
     '      "heading": string,   // e.g. "What\'s New", "New Integrations", "Bug Fixes", "Improvements"',
     '      "items": [',
-    '        { "text": string, "clickupIds": [string] }   // clickupIds are the CU-... ids (without prefix) this bullet relates to; may be []',
+    '        { "text": string, "connector": string, "clickupIds": [string] }   // clickupIds are the CU-... ids (without prefix) this bullet relates to; may be []',
     '      ]',
     '    }',
     '  ]',
@@ -160,8 +225,12 @@ async function generateFromAI() {
     '- Omit every admin-side change, including new features and bug fixes, and treat commits scoped to admin, admin-mcp, or usage as admin-side. If a commit mixes admin-side and user-facing work, describe only the user-facing part.',
     '- "Admin" here means platform admins only. Keep changes that affect regular users, even if the word appears (e.g. "Fixed Redmine time entries not loading for non-admin accounts").',
     '- primaryTag = "feature" if any new capability, else "fix" if only user-visible bug fixes, else "improvement".',
-    '- Group related items under one bullet where sensible (e.g. "Added PDF export and page-break support to Google Docs" rather than two bullets).',
+    `- connector is exactly one of: ${CONNECTORS.join(', ')}. Use "Website" for the site and dashboard, and "All connectors" only for a change every connector gets.`,
+    '- Each bullet is about ONE connector. A change to two connectors is two bullets; never merge items from different connectors.',
+    '- The connector is shown as a label before the text, so do not start the text with the connector name (write "Reply drafts stay in the original thread", not "Gmail: reply drafts...").',
+    '- Group related items for the same connector under one bullet where sensible (e.g. "Added PDF export and page-break support" rather than two bullets).',
     '- Keep bullets short — one line each, no trailing period required.',
+    '- Do not write reconnect instructions or name permission scopes. An "Action needed" section telling people to reconnect the connectors listed above is added after your output. A feature bullet may end with "(reconnect to use it)" when it depends on one of those connectors.',
   ].join('\n');
 
   console.log(`Calling ${OPENROUTER_MODEL} via OpenRouter to summarize ${commits.length} commit(s)...`);
@@ -260,12 +329,13 @@ async function generateFromAI() {
     .filter(s => s && typeof s.heading === 'string' && Array.isArray(s.items) && s.items.length > 0)
     .map(s => ({
       heading: s.heading.trim(),
-      items: s.items
+      items: groupByConnector(s.items
         .filter(it => it && typeof it.text === 'string' && it.text.trim())
         .map(it => ({
           text: it.text.trim(),
+          connector: normalizeConnector(it.connector),
           taskIds: Array.isArray(it.clickupIds) ? it.clickupIds.map(id => String(id).toLowerCase()) : [],
-        })),
+        }))),
     }))
     .filter(s => s.items.length > 0) : [];
 
@@ -290,7 +360,7 @@ function generateFromCommits() {
     const type = match ? match[1] : null;
     if (type && internalTypes.has(type)) continue;
 
-    const item = { text: cleanSubject(commit.subject), taskIds: extractTaskIds(commit) };
+    const item = { text: cleanSubject(commit.subject), connector: connectorFromSubject(commit.subject), taskIds: extractTaskIds(commit) };
     if (!item.text) continue;
     if (type === 'feat') feat.push(item);
     else if (type === 'fix') fix.push(item);
@@ -298,12 +368,24 @@ function generateFromCommits() {
   }
 
   const sections = [];
-  if (feat.length) sections.push({ heading: "What's New", items: feat });
-  if (fix.length) sections.push({ heading: 'Bug Fixes', items: fix });
-  if (other.length) sections.push({ heading: 'Improvements', items: other });
+  if (feat.length) sections.push({ heading: "What's New", items: groupByConnector(feat) });
+  if (fix.length) sections.push({ heading: 'Bug Fixes', items: groupByConnector(fix) });
+  if (other.length) sections.push({ heading: 'Improvements', items: groupByConnector(other) });
 
   const primaryTag = feat.length ? 'feature' : fix.length ? 'fix' : 'improvement';
   return { primaryTag, sections };
+}
+
+// --- Reconnect section (deterministic, appended to either path) ---
+function reconnectSection() {
+  if (scopeChanges.length === 0) return null;
+  return {
+    heading: 'Action needed',
+    items: scopeChanges.map(c => ({
+      text: `Reconnect ${c.name} from your dashboard: some new features need extra permissions, and an existing connection keeps the old ones until you reconnect`,
+      taskIds: [],
+    })),
+  };
 }
 
 // --- Helpers ---
@@ -318,6 +400,11 @@ function formatDate() {
 
 function enrichWithTasks(item, format) {
   let text = format === 'html' ? escapeHtml(item.text) : item.text;
+  if (item.connector) {
+    text = format === 'html' ? `<strong>${escapeHtml(item.connector)}:</strong> ${text}`
+      : format === 'slack' ? `*${item.connector}:* ${text}`
+      : `${item.connector}: ${text}`;
+  }
   for (const id of item.taskIds) {
     const task = tasks.get(id);
     if (!task) continue;
@@ -412,6 +499,14 @@ function generateEmail(summary, unlinked) {
 
 // --- Main ---
 const summary = (await generateFromAI()) ?? generateFromCommits();
+
+// First, so it is the first thing read. A release whose only user-facing change is a
+// new scope still has something to say.
+const reconnect = reconnectSection();
+if (reconnect) {
+  summary.sections = [reconnect, ...summary.sections];
+  delete summary.empty;
+}
 
 // Nothing user-facing means nothing to publish. The workflows treat a missing output
 // file as "skip this channel", so write none of them.

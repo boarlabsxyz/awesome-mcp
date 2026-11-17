@@ -415,12 +415,14 @@ CREATE TABLE IF NOT EXISTS storage_migrations (
 );
 `;
 
-// One Storage connector per user: every connector reaches the same per-user
-// data, and connectStorageMcp's check-then-insert alone races (two overlapping
-// /connect/storage requests both pass the check).
+// One Storage and one Sandbox connector per user: every connector reaches the
+// same per-user data or sandbox, and the connect's check-then-insert alone
+// races (two overlapping /connect/<slug> requests both pass the check).
 const CREATE_STORAGE_CONNECTION_UNIQUE_INDEX = `
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_connections_one_storage
   ON mcp_connections(user_id) WHERE mcp_slug = 'storage';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_connections_one_sandbox
+  ON mcp_connections(user_id) WHERE mcp_slug = 'sandbox';
 `;
 
 // Add unique constraint on instance_id (each instance must be unique)

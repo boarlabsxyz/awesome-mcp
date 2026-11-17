@@ -881,17 +881,18 @@ export function createAdminSession(user: UserRecord): UserSession {
 }
 
 /**
- * Storage MCP session. Its data is keyed by the CALLER's userId, so the session
- * is built from the authenticated user, never from a connection's owner.
+ * Session for a first-party connector with no credential (Storage, Sandbox).
+ * What it reaches is keyed by the CALLER's userId, so the session is built
+ * from the authenticated user, never from a connection's owner.
  */
-export function createStorageSession(user: UserRecord, instanceId?: string): UserSession {
+function createPerUserSession(user: UserRecord, mcpSlug: 'storage' | 'sandbox', instanceId?: string): UserSession {
   return {
     userId: user.id,
     apiKey: user.apiKey,
     email: user.email,
-    mcpSlug: 'storage',
+    mcpSlug,
     instanceId,
-    // Null placeholders for Google clients (the Storage MCP won't use them)
+    // Null placeholders for Google clients (these MCPs won't use them)
     googleDocs: null as any,
     googleDrive: null as any,
     googleSheets: null as any,
@@ -900,6 +901,16 @@ export function createStorageSession(user: UserRecord, instanceId?: string): Use
     googleSlides: null as any,
     oauthClient: null as any,
   };
+}
+
+/** Storage MCP session: the caller's own collections. */
+export function createStorageSession(user: UserRecord, instanceId?: string): UserSession {
+  return createPerUserSession(user, 'storage', instanceId);
+}
+
+/** Sandbox MCP session: the caller's own sandbox and quota. */
+export function createSandboxSession(user: UserRecord, instanceId?: string): UserSession {
+  return createPerUserSession(user, 'sandbox', instanceId);
 }
 
 export function clearSessionCache(apiKey: string): void {

@@ -76,16 +76,30 @@ describe('sharedTools.listRestEndpoints', () => {
     assert.equal(stub.tools[0].name, 'listRestEndpoints');
   });
 
-  it('execute returns every endpoint when no service filter is given', async () => {
+  it('execute returns only an index of services when no service filter is given', async () => {
     const stub = makeStubServer();
     registerListRestEndpoints(stub as any);
     const tool = stub.tools[0];
     const result = await tool.execute({}, { session: { userId: 1 } });
     const payload = JSON.parse(result);
-    assert.equal(payload.count, REST_CATALOG.length);
-    assert.equal(payload.endpoints.length, REST_CATALOG.length);
+    assert.equal(payload.endpoints, undefined, 'no endpoint list: the whole catalog is too large for a client');
+    assert.ok(result.length < 5000, `the index stays small (${result.length} chars)`);
+    assert.equal(payload.totalEndpoints, REST_CATALOG.length);
+    const counted = payload.services.reduce((n: number, s: any) => n + s.live + s.planned, 0);
+    assert.equal(counted, REST_CATALOG.length, 'every catalog entry is counted under its service');
+    const storage = payload.services.find((s: any) => s.service === 'storage');
+    assert.equal(storage.live, REST_CATALOG.filter(e => e.service === 'storage' && e.status === 'live').length);
+    assert.match(payload.next, /service/);
     assert.ok(payload.baseUrl.endsWith('/api/v1'));
     assert.ok(payload.auth.includes('Bearer'));
+  });
+
+  it('names every service in the service parameter', () => {
+    const stub = makeStubServer();
+    registerListRestEndpoints(stub as any);
+    const describe = stub.tools[0].parameters.shape.service.description;
+    assert.match(describe, /\bstorage\b/);
+    assert.match(describe, /\bdocs\b/);
   });
 
   it('execute filters by service when service is provided', async () => {
@@ -102,7 +116,7 @@ describe('sharedTools.listRestEndpoints', () => {
     const stub = makeStubServer();
     registerListRestEndpoints(stub as any);
     const tool = stub.tools[0];
-    const result = await tool.execute({}, { session: { userId: 1 } });
+    const result = await tool.execute({ service: 'calendar' }, { session: { userId: 1 } });
     const payload = JSON.parse(result);
     const sample = payload.endpoints[0];
     for (const k of ['service', 'method', 'path', 'summary', 'mcpTool', 'status']) {

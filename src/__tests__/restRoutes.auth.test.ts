@@ -21,6 +21,10 @@ if (!process.env.GOOGLE_CREDENTIALS) {
 // They do not require any upstream Google/Slack/ClickUp mocking, so they
 // cover the routes' presence + auth gate cheaply.
 const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
+  // Storage reads.
+  '/api/v1/storage/collections',
+  '/api/v1/storage/collections/people',
+  '/api/v1/storage/collections/people/records/rec-1',
   // Pinecone reads. /indexes is in both arrays: GET lists, POST creates.
   '/api/v1/pinecone/indexes',
   '/api/v1/pinecone/indexes/company-docs',
@@ -37,26 +41,42 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/drive/folders/folder-123',
   '/api/v1/drive/files/file-123/permissions',
   '/api/v1/drive/files/file-123/public',
+  '/api/v1/gmail/filters',
+  '/api/v1/gmail/filters/f-1',
   '/api/v1/gmail/labels',
   '/api/v1/slides/presentation-123/pages/page-123/thumbnail',
   '/api/v1/slides/presentation-123/comments',
   '/api/v1/sheets/sheet-123/ranges?range=A1:B2',
+  '/api/v1/sheets/sheet-123/cells?range=A1:B2',
   '/api/v1/sheets/sheet-123/rows/1',
+  '/api/v1/drive/files?q=budget',
+  '/api/v1/drive/changes',
   '/api/v1/sheets/sheet-123/search?col=A&val=x',
   '/api/v1/clickup/docs/doc-123?workspaceId=w-1',
   '/api/v1/clickup/docs/doc-123/pages/page-123?workspaceId=w-1',
   '/api/v1/clickup/workspaces/w-1/docs',
   '/api/v1/clickup/workspaces/w-1/docs/search?query=sync',
+  '/api/v1/clickup/workspaces/90151491867/attachments?url=https%3A%2F%2Ft90151491867.p.clickup-attachments.com%2Ft90151491867%2Fa%2Fb.mp4',
   '/api/v1/slack/channels',
   '/api/v1/slack/channels/C123/messages',
   '/api/v1/slack/channels/C123/threads/1234.5678',
   '/api/v1/slack/users',
+  '/api/v1/slack/users/U123',
+  '/api/v1/slack/channels/C123/members',
+  '/api/v1/slack/canvases/F123',
+  '/api/v1/slack/lists/F123/items',
+  '/api/v1/slack/lists/F123/items/Rec123',
   '/api/v1/drive/files/file-123/download',
   '/api/v1/gmail/messages/m-1/attachments/a-1',
   '/api/v1/clickup/workspaces/w-1/members',
   '/api/v1/peopleforce/employees',
   '/api/v1/peopleforce/employees/emp-123',
   '/api/v1/peopleforce/departments',
+  '/api/v1/peopleforce/holidays',
+  '/api/v1/peopleforce/holiday-policies',
+  '/api/v1/peopleforce/employees/emp-123/salaries',
+  '/api/v1/peopleforce/employees/emp-123/holidays',
+  '/api/v1/peopleforce/employees/emp-123/absences?from=2026-01-01&to=2026-01-31',
   '/api/v1/peopleforce/leave-requests',
   '/api/v1/peopleforce/leave-requests/lr-123',
   '/api/v1/peopleforce/leave-types',
@@ -157,6 +177,13 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/collections/col-123/structure',
   '/api/v1/outline/comments/cmt-123',
   '/api/v1/outline/attachments/att-123/url',
+  '/api/v1/outline/documents/doc-123/revisions',
+  '/api/v1/outline/documents/doc-123/compare?from=rev-1',
+  '/api/v1/outline/revisions/rev-123',
+  '/api/v1/outline/users',
+  '/api/v1/outline/users/usr-123',
+  '/api/v1/outline/templates',
+  '/api/v1/outline/templates/tpl-123',
   '/api/v1/browserbase/sessions',
   '/api/v1/browserbase/sessions/sess-123',
   // GitHub (registered from GITHUB_READ_ROUTES). The contents route is listed
@@ -184,6 +211,13 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
 // here proves the gate runs ahead of validation and an unauthenticated caller
 // can't probe the schema by watching 400s.
 const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
+  // Drive upload. '/api/v1/drive/files' is in both arrays: GET searches, POST uploads.
+  '/api/v1/drive/files',
+  '/api/v1/drive/upload-sessions',
+  // Storage. /find is a READ served over POST (the where conditions).
+  '/api/v1/storage/collections/people/find',
+  '/api/v1/storage/collections/people/records',
+  '/api/v1/storage/collections/people/records/rec-1/update',
   // Pinecone. The two searches and the rerank are READS served over POST (the
   // body carries a filter and rerank options), so they are gated here by verb
   // rather than in the GET array above.
@@ -216,6 +250,17 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/slack/channels/C123/messages',
   '/api/v1/slack/channels/C123/threads/1234.5678',
   '/api/v1/slack/channels/C123/messages/1234.5678/edit',
+  // '/api/v1/slack/channels' is in both arrays: GET lists, POST creates.
+  '/api/v1/slack/channels',
+  '/api/v1/slack/channels/C123/messages/1234.5678/reactions',
+  '/api/v1/slack/channels/C123/scheduled-messages',
+  '/api/v1/slack/files',
+  '/api/v1/slack/canvases',
+  '/api/v1/slack/canvases/F123/edit',
+  '/api/v1/slack/lists',
+  '/api/v1/slack/lists/F123/update',
+  '/api/v1/slack/lists/F123/items',
+  '/api/v1/slack/lists/F123/items/Rec123/update',
   // Redmine
   '/api/v1/redmine/issues',
   '/api/v1/redmine/issues/123',
@@ -258,6 +303,8 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/hubspot/engagements/notes/n-1/delete',
   // Gmail. /labels is in both arrays: GET lists, POST creates.
   '/api/v1/gmail/messages/send',
+  // '/api/v1/gmail/filters' is in both arrays: GET lists, POST creates.
+  '/api/v1/gmail/filters',
   '/api/v1/gmail/messages/batch-modify',
   '/api/v1/gmail/messages/batch-trash',
   '/api/v1/gmail/messages/m-1/modify',
@@ -280,6 +327,11 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/docs/doc-123/paragraph-style',
   '/api/v1/docs/doc-123/format-matching-text',
   '/api/v1/docs/doc-123/tables',
+  '/api/v1/docs/doc-123/tables/structure',
+  '/api/v1/docs/doc-123/tables/cell-style',
+  '/api/v1/docs/doc-123/tabs',
+  '/api/v1/docs/doc-123/tabs/t.1/update',
+  '/api/v1/docs/doc-123/footnotes',
   '/api/v1/docs/doc-123/page-breaks',
   '/api/v1/docs/doc-123/images/from-url',
   '/api/v1/docs/doc-123/images',
@@ -342,8 +394,16 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/documents/doc-123/unarchive',
   '/api/v1/outline/documents/doc-123/restore',
   '/api/v1/outline/documents/doc-123/comments',
+  '/api/v1/outline/documents/doc-123/unpublish',
+  '/api/v1/outline/documents/import',
+  '/api/v1/outline/attachments',
+  '/api/v1/outline/comments/cmt-123/update',
+  '/api/v1/outline/comments/cmt-123/resolve',
+  '/api/v1/outline/comments/cmt-123/reopen',
   '/api/v1/outline/collections',
   '/api/v1/outline/collections/col-123',
+  '/api/v1/outline/collections/col-123/archive',
+  '/api/v1/outline/collections/col-123/restore',
   // The two export starters are POSTs, not GETs: each call queues another
   // server-side export job, and a GET invites a proxy to repeat it.
   '/api/v1/outline/collections/col-123/export',

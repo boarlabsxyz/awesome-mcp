@@ -23,6 +23,7 @@ import {
   ApplyTextStyleToolParameters,
   BatchOperationSchema,
   DocumentIdParameter,
+  RequiredRevisionIdParameter,
 } from '../types.js';
 
 /** Hex colour, with or without the leading #, 3 or 6 digits. */
@@ -47,6 +48,7 @@ export const insertTextSchema = DocumentIdParameter.extend({
   textToInsert: z.string().min(1).describe('The text to insert.'),
   index: z.number().int().min(1).describe('The index (1-based) where the text should be inserted.'),
   tabId: z.string().optional().describe('The ID of the specific tab to insert into. Defaults to the first tab.'),
+  requiredRevisionId: RequiredRevisionIdParameter,
 });
 
 // endIndex > startIndex is enforced here, not in the handler: a zero-width or
@@ -55,6 +57,7 @@ export const deleteRangeSchema = DocumentIdParameter.extend({
   startIndex: z.number().int().min(1).describe('The starting index of the text range (inclusive, starts from 1).'),
   endIndex: z.number().int().min(1).describe('The ending index of the text range (exclusive).'),
   tabId: z.string().optional().describe('The ID of the specific tab to delete from. Defaults to the first tab.'),
+  requiredRevisionId: RequiredRevisionIdParameter,
 }).refine((data) => data.endIndex > data.startIndex, {
   message: 'endIndex must be greater than startIndex',
   path: ['endIndex'],
@@ -113,6 +116,78 @@ export const batchUpdateDocSchema = z.object({
   suggestMode: z.boolean().optional()
     .describe('If true, every operation in the batch is applied as a tracked SUGGESTION for a human to accept or reject, '
       + 'instead of editing the document directly. Use for proposed edits; the document is unchanged until someone accepts.'),
+  requiredRevisionId: RequiredRevisionIdParameter,
+});
+
+// === Tabs ===
+
+export const createDocumentTabSchema = DocumentIdParameter.extend({
+  title: z.string().min(1).optional().describe('Title of the new tab. Google names it "Tab N" if omitted.'),
+  parentTabId: z.string().optional().describe('Optional: create the tab nested under this tab (from listDocumentTabs). Omit for a top-level tab.'),
+  index: z.number().int().min(0).optional().describe('Optional zero-based position among its sibling tabs. Defaults to last.'),
+  iconEmoji: z.string().min(1).optional().describe('Optional single emoji shown as the tab icon.'),
+});
+
+export const updateDocumentTabSchema = DocumentIdParameter.extend({
+  tabId: z.string().describe('The ID of the tab to change (from listDocumentTabs).'),
+  title: z.string().min(1).optional().describe('New title for the tab.'),
+  iconEmoji: z.string().min(1).optional().describe('New single-emoji icon for the tab.'),
+  index: z.number().int().min(0).optional().describe('New zero-based position among its sibling tabs.'),
+});
+
+export const deleteDocumentTabSchema = DocumentIdParameter.extend({
+  tabId: z.string().describe('The ID of the tab to delete. Its nested child tabs are deleted with it.'),
+});
+
+// === Footnotes ===
+
+export const createFootnoteSchema = DocumentIdParameter.extend({
+  index: z.number().int().min(1).describe('1-based index in the body where the footnote reference number goes. Must be inside a paragraph.'),
+  text: z.string().min(1).describe('The footnote text.'),
+  tabId: z.string().optional().describe('Optional tab ID. Defaults to the first tab.'),
+  requiredRevisionId: RequiredRevisionIdParameter,
+});
+
+// === Tables ===
+
+/** Which table: its start index (from inspectDocStructure) in which tab. */
+const tableTarget = {
+  tableStartIndex: z.number().int().min(1).describe('The start index of the table, from inspectDocStructure (elements of type table).'),
+  tabId: z.string().optional().describe('Optional tab ID the table is in. Defaults to the first tab.'),
+  requiredRevisionId: RequiredRevisionIdParameter,
+};
+
+export const modifyTableStructureSchema = DocumentIdParameter.extend({
+  ...tableTarget,
+  action: z.enum(['insert_rows_above', 'insert_rows_below', 'insert_columns_left', 'insert_columns_right', 'merge_cells', 'unmerge_cells'])
+    .describe('What to do. Inserts are relative to the cell at rowIndex/columnIndex; merge/unmerge act on the cell block starting there.'),
+  rowIndex: z.number().int().min(0).describe('Zero-based row of the reference (or top-left) cell.'),
+  columnIndex: z.number().int().min(0).describe('Zero-based column of the reference (or top-left) cell.'),
+  count: z.number().int().min(1).max(20).optional().describe('For inserts: how many rows or columns to add (1-20). Defaults to 1.'),
+  rowSpan: z.number().int().min(1).optional().describe('For merge/unmerge: rows in the block. Defaults to 1.'),
+  columnSpan: z.number().int().min(1).optional().describe('For merge/unmerge: columns in the block. Defaults to 1.'),
+});
+
+export const deleteTableRowOrColumnSchema = DocumentIdParameter.extend({
+  ...tableTarget,
+  target: z.enum(['row', 'column']).describe('Delete a row or a column.'),
+  index: z.number().int().min(0).describe('Zero-based index of the row or column to delete.'),
+});
+
+export const formatTableCellsSchema = DocumentIdParameter.extend({
+  ...tableTarget,
+  rowIndex: z.number().int().min(0).optional().describe('Zero-based first row of the cell block. Omit row and column to format the whole table.'),
+  columnIndex: z.number().int().min(0).optional().describe('Zero-based first column of the cell block.'),
+  rowSpan: z.number().int().min(1).optional().describe('Rows in the block. Defaults to 1 when rowIndex is given.'),
+  columnSpan: z.number().int().min(1).optional().describe('Columns in the block. Defaults to 1 when columnIndex is given.'),
+  backgroundColor: hexColor('Cell background color, hex (e.g. "#FFF2CC").'),
+  contentAlignment: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional().describe('Vertical alignment of cell content.'),
+  paddingPt: z.number().min(0).optional().describe('Padding on all four sides, in points.'),
+  borderColor: hexColor('Color of all four cell borders, hex.'),
+  borderWidthPt: z.number().min(0).optional().describe('Width of all four cell borders, in points. 0 hides them.'),
+  borderDashStyle: z.enum(['SOLID', 'DOT', 'DASH']).optional().describe('Dash style of all four cell borders.'),
+  minRowHeightPt: z.number().min(0).optional().describe('Minimum height, in points, of every row the block covers.'),
+  columnWidthPt: z.number().min(5).optional().describe('Fixed width, in points (min 5), of every column the block covers.'),
 });
 
 // === Images ===
@@ -283,6 +358,13 @@ export type FindAndReplaceArgs = z.infer<typeof findAndReplaceSchema>;
 export type InsertTableArgs = z.infer<typeof insertTableSchema>;
 export type InsertPageBreakArgs = z.infer<typeof insertPageBreakSchema>;
 export type BatchUpdateDocArgs = z.infer<typeof batchUpdateDocSchema>;
+export type CreateDocumentTabArgs = z.infer<typeof createDocumentTabSchema>;
+export type UpdateDocumentTabArgs = z.infer<typeof updateDocumentTabSchema>;
+export type DeleteDocumentTabArgs = z.infer<typeof deleteDocumentTabSchema>;
+export type CreateFootnoteArgs = z.infer<typeof createFootnoteSchema>;
+export type ModifyTableStructureArgs = z.infer<typeof modifyTableStructureSchema>;
+export type DeleteTableRowOrColumnArgs = z.infer<typeof deleteTableRowOrColumnSchema>;
+export type FormatTableCellsArgs = z.infer<typeof formatTableCellsSchema>;
 export type InsertImageFromUrlArgs = z.infer<typeof insertImageFromUrlSchema>;
 export type InsertLocalImageArgs = z.infer<typeof insertLocalImageSchema>;
 export type AddCommentArgs = z.infer<typeof addCommentSchema>;

@@ -20,22 +20,26 @@ export const NOT_ADMIN_MESSAGE =
   'The Admin MCP is for administrators only. Your account is not in ADMIN_EMAILS.';
 
 /** `tool` with an `execute` that refuses any caller whose session email is not an admin. */
-export function guardTool<T extends AnyTool>(tool: T): T {
+export function guardTool<T extends AnyTool>(tool: T, message = NOT_ADMIN_MESSAGE): T {
   const execute = tool.execute;
   return {
     ...tool,
     execute: async (args: any, context: any) => {
-      if (!isAdminEmail(context?.session?.email)) throw new UserError(NOT_ADMIN_MESSAGE);
+      if (!isAdminEmail(context?.session?.email)) throw new UserError(message);
       return execute.call(tool, args, context);
     },
   };
 }
 
-/** Makes every tool later added to `server` refuse non-admin callers. Must wrap the constructor. */
-export function requireAdminForEveryTool<S extends FastMCP<any>>(server: S): S {
+/**
+ * Makes every tool later added to `server` refuse non-admin callers. Must wrap
+ * the constructor. Used by every MCP in ADMIN_ONLY_MCPS (src/auth/admin.ts),
+ * each with its own refusal message.
+ */
+export function requireAdminForEveryTool<S extends FastMCP<any>>(server: S, message = NOT_ADMIN_MESSAGE): S {
   const addTool = server.addTool.bind(server);
   const addTools = server.addTools.bind(server);
-  (server as any).addTool = (tool: AnyTool) => addTool(guardTool(tool) as any);
-  (server as any).addTools = (tools: AnyTool[]) => addTools(tools.map((t) => guardTool(t)) as any);
+  (server as any).addTool = (tool: AnyTool) => addTool(guardTool(tool, message) as any);
+  (server as any).addTools = (tools: AnyTool[]) => addTools(tools.map((t) => guardTool(t, message)) as any);
   return server;
 }

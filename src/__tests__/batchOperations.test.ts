@@ -217,3 +217,41 @@ describe('mapBatchOperationToRequest', () => {
     assert.equal(requests[0].createParagraphBullets!.range!.endIndex, 20);
   });
 });
+
+describe('batch operations: tabs and list presets', () => {
+  it('create_bullet_list keeps the disc preset by default and sends a numbered one when asked', () => {
+    const plain = mapBatchOperationToRequest(BatchOperationSchema.parse({ type: 'create_bullet_list', startIndex: 1, endIndex: 5 }));
+    assert.equal(plain[0].createParagraphBullets?.bulletPreset, 'BULLET_DISC_CIRCLE_SQUARE');
+    const numbered = mapBatchOperationToRequest(BatchOperationSchema.parse({
+      type: 'create_bullet_list', startIndex: 1, endIndex: 5, bulletPreset: 'NUMBERED_DECIMAL_ALPHA_ROMAN',
+    }));
+    assert.equal(numbered[0].createParagraphBullets?.bulletPreset, 'NUMBERED_DECIMAL_ALPHA_ROMAN');
+  });
+
+  it('rejects a bullet preset Google does not define', () => {
+    assert.throws(() => BatchOperationSchema.parse({ type: 'create_bullet_list', startIndex: 1, endIndex: 5, bulletPreset: 'NUMBERED' }));
+  });
+
+  it('puts tabId on every location and range, and leaves it out when not given', () => {
+    const cases: any[] = [
+      [{ type: 'insert_text', index: 3, text: 'x' }, (r: any) => r.insertText.location],
+      [{ type: 'delete_text', startIndex: 1, endIndex: 3 }, (r: any) => r.deleteContentRange.range],
+      [{ type: 'format_text', startIndex: 1, endIndex: 3, style: { bold: true } }, (r: any) => r.updateTextStyle.range],
+      [{ type: 'update_paragraph_style', startIndex: 1, endIndex: 3, style: { alignment: 'CENTER' } }, (r: any) => r.updateParagraphStyle.range],
+      [{ type: 'insert_table', index: 3, rows: 1, columns: 1 }, (r: any) => r.insertTable.location],
+      [{ type: 'insert_page_break', index: 3 }, (r: any) => r.insertPageBreak.location],
+      [{ type: 'create_bullet_list', startIndex: 1, endIndex: 3 }, (r: any) => r.createParagraphBullets.range],
+    ];
+    for (const [op, pick] of cases) {
+      assert.equal(pick(mapBatchOperationToRequest(BatchOperationSchema.parse({ ...op, tabId: 't.2' }))[0]).tabId, 't.2', op.type);
+      assert.equal('tabId' in pick(mapBatchOperationToRequest(BatchOperationSchema.parse(op))[0]), false, op.type);
+    }
+  });
+
+  it('restricts a replacement to the named tab with tabsCriteria', () => {
+    const [req] = mapBatchOperationToRequest(BatchOperationSchema.parse({ type: 'replace_text', findText: 'a', replaceText: 'b', tabId: 't.2' }));
+    assert.deepEqual(req.replaceAllText?.tabsCriteria, { tabIds: ['t.2'] });
+    const [all] = mapBatchOperationToRequest(BatchOperationSchema.parse({ type: 'find_replace', findText: 'a', replaceText: 'b' }));
+    assert.equal(all.replaceAllText?.tabsCriteria, undefined);
+  });
+});

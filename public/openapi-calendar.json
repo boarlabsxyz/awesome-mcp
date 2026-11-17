@@ -275,6 +275,13 @@
                     ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
+                  },
+                  "recurrence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Make it a recurring series: RFC 5545 lines such as RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10. Requires timeZone; without it the request is a 400."
                   }
                 }
               }
@@ -493,6 +500,22 @@
                     ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
+                  },
+                  "addAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Invite these guests; everyone already invited, and their responses, are kept."
+                  },
+                  "removeAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Uninvite these guests. Every address must be on the event, or nothing changes (400)."
                   }
                 }
               }
@@ -730,6 +753,22 @@
                     ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
+                  },
+                  "addAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Invite these guests; everyone already invited, and their responses, are kept."
+                  },
+                  "removeAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Uninvite these guests. Every address must be on the event, or nothing changes (400)."
                   }
                 }
               }

@@ -315,6 +315,15 @@
                   "range": {
                     "type": "string",
                     "description": "The A1 notation range to read (e.g., 'Sheet1!A1:D10')"
+                  },
+                  "valueRenderOption": {
+                    "type": "string",
+                    "enum": [
+                      "FORMATTED_VALUE",
+                      "UNFORMATTED_VALUE",
+                      "FORMULA"
+                    ],
+                    "description": "FORMATTED_VALUE (default) as displayed; UNFORMATTED_VALUE the raw value; FORMULA the formula text."
                   }
                 }
               }
@@ -635,7 +644,7 @@
       "post": {
         "operationId": "batchUpdateSpreadsheet",
         "summary": "Apply formatting and sheet-lifecycle operations atomically",
-        "description": "Applies an ordered list of operations in a single atomic batch: if one is rejected, none of them apply. Sheet names are resolved against the live spreadsheet. appendDimension and insertDimension grow the grid, which /write does not do: a tab is 1000 rows and a taller write fails with \"exceeds grid limits\" until rows are added (or the tab is created at size with addSheet rowCount/columnCount). WARNING: the deleteSheet operation destroys a tab and every value on it, and there is no confirmation step on this plane.",
+        "description": "Applies an ordered list of operations in a single atomic batch: if one is rejected, none of them apply. Sheet names are resolved against the live spreadsheet. appendDimension and insertDimension grow the grid, which /write does not do: a tab is 1000 rows and a taller write fails with \"exceeds grid limits\" until rows are added (or the tab is created at size with addSheet rowCount/columnCount). WARNING: the deleteSheet operation destroys a tab and every value on it, and there is no confirmation step on this plane. alignment sets horizontal/vertical alignment and text wrapping; dataValidation adds dropdowns, checkboxes and number or formula rules (rule.kind clear removes them); addChart creates a native chart from a block with a header row (first column categories, further columns series). Deleting rows or columns is MCP-only.",
         "parameters": [
           {
             "name": "spreadsheetId",
@@ -685,7 +694,10 @@
                             "duplicateSheet",
                             "addSheet",
                             "appendDimension",
-                            "insertDimension"
+                            "insertDimension",
+                            "alignment",
+                            "dataValidation",
+                            "addChart"
                           ]
                         }
                       },
@@ -721,6 +733,13 @@
                         "type": "string"
                       },
                       "description": "One line per operation, in order, for auditing a large batch."
+                    },
+                    "chartIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "IDs of charts created by addChart operations, in order."
                     }
                   }
                 }
@@ -854,6 +873,157 @@
           },
           "404": {
             "description": "Spreadsheet or calendar resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/cells": {
+      "get": {
+        "operationId": "inspectSpreadsheetCells",
+        "summary": "Inspect cells: formulas, raw and displayed values, formatting, links, notes, validation",
+        "description": "Read-only. Lists non-empty cells only, capped by maxCells. A cell holding several links has no hyperlink; its links are listed under links (from textFormatRuns).",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A1 range, e.g. Sheet1!A1:D20"
+          },
+          {
+            "name": "maxCells",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000,
+              "default": 500
+            },
+            "description": "Cap on cells listed."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "sheetTitle": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "range": {
+                      "type": "string"
+                    },
+                    "cells": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "cell": {
+                            "type": "string"
+                          },
+                          "formula": {
+                            "type": "string"
+                          },
+                          "userEnteredValue": {
+                            "type": "object"
+                          },
+                          "effectiveValue": {
+                            "type": "object"
+                          },
+                          "formattedValue": {
+                            "type": "string"
+                          },
+                          "format": {
+                            "type": "object"
+                          },
+                          "hyperlink": {
+                            "type": "string"
+                          },
+                          "links": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "note": {
+                            "type": "string"
+                          },
+                          "dataValidation": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    },
+                    "nonEmptyCells": {
+                      "type": "integer"
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "true when maxCells cut the list short."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid range or maxCells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
             "content": {
               "application/json": {
                 "schema": {

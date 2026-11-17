@@ -48,6 +48,7 @@ const SERVICES = [
   ['src/supabase/server.ts',              'Supabase',              'supabase'],
   ['src/admin-mcp/server.ts',             'Admin (usage analytics)', null],
   ['src/storage/server.ts',               'Storage',               'storage'],
+  ['src/sandbox/server.ts',               'Sandbox',               null],
 ];
 
 // ---------------------------------------------------------------------------
@@ -61,12 +62,15 @@ const SERVICES = [
 function sharedToolRegistrants() {
   const registered = [];
   const missing = [];
+  const listOnly = [];
   for (const [file, title, , autoRegistered] of SERVICES) {
     if (autoRegistered) continue;
     const src = readFileSync(join(root, file), 'utf8');
-    (src.includes('registerMintRestBearerForCurl(') ? registered : missing).push(title);
+    if (src.includes('registerMintRestBearerForCurl(')) registered.push(title);
+    else if (src.includes('registerListRestEndpoints(')) listOnly.push(title);
+    else missing.push(title);
   }
-  return { registered, missing };
+  return { registered, missing, listOnly };
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +350,8 @@ for (const s of orderedSections) {
   out.push('');
   const sourceLabel = s.files.length === 1 ? `\`${s.files[0]}\`` : s.files.map(f => `\`${f}\``).join(', ');
   const note = s.autoRegistered
-    ? ` (registered by ${REGISTRANTS.registered.length} of ${REGISTRANTS.registered.length + REGISTRANTS.missing.length} servers` +
+    ? ` (registered by ${REGISTRANTS.registered.length} of ${REGISTRANTS.registered.length + REGISTRANTS.missing.length + REGISTRANTS.listOnly.length} servers` +
+      (REGISTRANTS.listOnly.length ? `; only listRestEndpoints on ${REGISTRANTS.listOnly.join(', ')}` : '') +
       (REGISTRANTS.missing.length ? `; not on ${REGISTRANTS.missing.join(', ')})` : ')')
     : '';
   out.push(`Source: ${sourceLabel} — ${s.tools.length} tools${note}.`);

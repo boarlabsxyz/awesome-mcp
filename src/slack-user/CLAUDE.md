@@ -13,6 +13,9 @@ Shared Slack code (files, posting/editing, channel events, `SlackClient`): see `
 - **Never read `shared_team_ids` directly** — Slack Connect partners are in `connected_team_ids` / `pending_connected_team_ids`. Use `channelTeamIds()` (`src/slack/apiHelpers.ts`): `includePending: true` for discovery, `false` for enforcement (an unaccepted invite must not deny).
 - **`diagnoseChannelAccess` is the generic "why can't I see #x"** — never hardcode a channel-name exemption (spoofable by any workspace).
 
+### Deliberately not rule-gated
+- **`createChannel`, `openDm` (including group DMs), `getUserProfile`, `listUsers`** read no channel content; posting into the result still runs `enforceAccess`, DM member check included. `createList` creates a file nobody can see yet.
+
 ### `listChannels` output
 - **Three buckets, counted separately in the summary**, on both the payload-org and backfill (`verifyBackfilledChannel`) paths: org-denied rows that pass `passesNonOrgRules` are listed with `⚠ Not readable: shared with <Org> (ID)` and topic/purpose withheld; channels past the backfill cap are `caution` (`⚠ Organisation unverified`, free text kept — nothing denied them); rows denied by the user's own patterns are hidden but counted (listing them would expose names they excluded).
 

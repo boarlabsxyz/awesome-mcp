@@ -4,7 +4,7 @@ import {
   handleSendEmail, handleDraftEmail, handleReadEmail, handleSearchEmails,
   handleModifyEmail, handleDeleteEmail, handleBatchModifyEmails, handleBatchDeleteEmails,
   handleListLabels, handleCreateLabel, handleUpdateLabel, handleDeleteLabel,
-  handleGetOrCreateLabel, handleGetAttachment,
+  handleGetOrCreateLabel, handleGetAttachment, handleListFilters, handleGetFilter, handleCreateFilter,
 } from '../google-gmail/toolHandlers.js';
 
 const noopLog = { info: () => {}, error: () => {} };
@@ -376,5 +376,93 @@ describe('handleGetAttachment', () => {
     });
     const result = await handleGetAttachment(gmail, { messageId: 'msg1', attachmentId: 'att1' }, noopLog);
     assert.ok(result.includes('**Data (base64):**\n'));
+  });
+});
+
+describe('filters and reply drafts (tool handlers)', () => {
+  const withFilters = (filters: any) => ({ users: { settings: { filters } } }) as any;
+
+  it('lists filters with their criteria and actions', async () => {
+    const out = await handleListFilters(withFilters({ list: mock.fn(async () => ({ data: { filter: [
+      { id: 'f1', criteria: { from: 'a@x.io' }, action: { removeLabelIds: ['INBOX'] } },
+    ] } })) }), noopLog);
+    assert.match(out, /1 filter\(s\)/);
+    assert.match(out, /\*\*f1\*\* — when from="a@x\.io" → remove INBOX/);
+  });
+
+  it('says plainly when there are no filters', async () => {
+    const out = await handleListFilters(withFilters({ list: mock.fn(async () => ({ data: {} })) }), noopLog);
+    assert.equal(out, 'No filters are set up on this account.');
+  });
+
+  it('maps a missing settings scope to a Reconnect message, and 404 to not found', async () => {
+    const scope = Object.assign(new Error('insufficient authentication scopes'), { code: 403 });
+    await assert.rejects(() => handleListFilters(withFilters({ list: mock.fn(async () => { throw scope; }) }), noopLog), /Reconnect Gmail/);
+    const missing = Object.assign(new Error('nope'), { code: 404 });
+    await assert.rejects(() => handleGetFilter(withFilters({ get: mock.fn(async () => { throw missing; }) }), { filterId: 'f9' }, noopLog), /Filter not found/);
+  });
+
+  it('says a new filter only affects mail arriving afterwards', async () => {
+    const out = await handleCreateFilter(withFilters({ create: mock.fn(async (r: any) => ({ data: { id: 'f2', ...r.requestBody } })) }), { subject: 'invoice', star: true }, noopLog);
+    assert.match(out, /not to existing mail/);
+  });
+
+  it('warns when Gmail did not file a reply draft in the original thread', async () => {
+    const gmail = mockGmail({
+      messages: { get: mock.fn(async () => ({ data: { threadId: 'th-1', payload: { headers: [{ name: 'Message-ID', value: '<a@b>' }, { name: 'Subject', value: 'Re: Plan' }, { name: 'From', value: 'x@y.z' }] } } })) },
+      drafts: { create: mock.fn(async () => ({ data: { id: 'd1', message: { id: 'm1', threadId: 'th-OTHER' } } })) },
+    });
+    const out = await handleDraftEmail(gmail as any, { body: 'ok', replyToMessageId: 'p1' } as any, noopLog);
+    assert.match(out, /Warning:.*did not put the draft in the original conversation/);
+    const raw = Buffer.from((gmail.users.drafts.create.mock.calls[0].arguments as any)[0].requestBody.message.raw, 'base64url').toString();
+    assert.match(raw, /Subject: Re: Plan\r\n/, 'an existing "Re:" is not doubled');
+  });
+});
+
+describe('review follow-ups', () => {
+  const parentWith = (headers: Array<{ name: string; value: string }>, labelIds: string[] = ['INBOX']) => mockGmail({
+    messages: { get: mock.fn(async () => ({ data: { threadId: 'th-1', labelIds, payload: { headers } } })) },
+    drafts: { create: mock.fn(async () => ({ data: { id: 'd1', message: { id: 'm1', threadId: 'th-1' } } })) },
+  });
+  const rawOf = (gmail: any) => Buffer.from(gmail.users.drafts.create.mock.calls[0].arguments[0].requestBody.message.raw, 'base64url').toString();
+
+  it('flattens line breaks in headers copied from the parent, so none can add a header', async () => {
+    const gmail = parentWith([
+      { name: 'Message-ID', value: '<a@b>' },
+      { name: 'Subject', value: 'Hi\r\nBcc: evil@x.io' },
+      { name: 'Reply-To', value: 'ann@x.io\r\nBcc: evil@x.io' },
+    ]);
+    await handleDraftEmail(gmail as any, { body: 'ok', replyToMessageId: 'p1' } as any, noopLog);
+    const raw = rawOf(gmail);
+    assert.doesNotMatch(raw, /\r\nBcc:/);
+    assert.match(raw, /^To: ann@x\.io Bcc: evil@x\.io\r\nSubject: Re: Hi Bcc: evil@x\.io\r\n/);
+  });
+
+  it('a reply to a message you sent goes to its recipients, not to you', async () => {
+    const gmail = parentWith([
+      { name: 'Message-ID', value: '<a@b>' }, { name: 'Subject', value: 'Plan' },
+      { name: 'From', value: 'me@x.io' }, { name: 'To', value: 'team@x.io' },
+    ], ['SENT']);
+    await handleDraftEmail(gmail as any, { body: 'ok', replyToMessageId: 'p1' } as any, noopLog);
+    assert.match(rawOf(gmail), /^To: team@x\.io\r\n/);
+  });
+
+  it('names a missing original message', async () => {
+    const gmail = mockGmail({ messages: { get: mock.fn(async () => { throw Object.assign(new Error('Requested entity was not found.'), { code: 404 }); }) } });
+    await assert.rejects(() => handleDraftEmail(gmail as any, { body: 'x', replyToMessageId: 'gone' } as any, noopLog), /Original message not found \(ID: gone\)/);
+  });
+
+  it('filters: hasAttachment false is no criterion, and a label added and removed is refused', async () => {
+    const { buildFilter } = await import('../google-gmail/toolHandlers.js');
+    assert.throws(() => buildFilter({ hasAttachment: false, star: true }), /at least one criterion/);
+    assert.throws(() => buildFilter({ from: 'a@x.io', archive: true, addLabelIds: ['INBOX'] }), /both added and removed: INBOX/);
+  });
+
+  it('deleteFilter deletes by id and says existing mail is unchanged', async () => {
+    const { handleDeleteFilter } = await import('../google-gmail/toolHandlers.js');
+    const del = mock.fn(async (_req: any) => ({}));
+    const out = await handleDeleteFilter({ users: { settings: { filters: { delete: del } } } } as any, { filterId: 'f1' }, noopLog);
+    assert.deepEqual(del.mock.calls[0].arguments[0], { userId: 'me', id: 'f1' });
+    assert.match(out, /stays as it is/);
   });
 });

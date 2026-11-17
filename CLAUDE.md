@@ -1,6 +1,6 @@
 # Awesome MCP
 
-Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase, a first-party Storage MCP (schema-enforced collections in our own Postgres), plus an admins-only Admin MCP over the usage analytics — and a curl-able REST data plane under `/api/v1/*`.
+Multi-service FastMCP hosting platform: one MCP server per provider under `src/<provider>/server.ts` — Google Docs, Sheets, Calendar, Drive, Gmail and Slides, ClickUp, Slack (bot + user), Outline, PeopleForce (v2/v3 and v4), HubSpot, Redmine, Browserbase, GitHub, Pinecone and Supabase, first-party Storage (schema-enforced collections in our own Postgres) and Sandbox (Python/JavaScript on our own Deno + Pyodide runner service) MCPs, plus an Admin MCP over the usage analytics — those three admins only (`ADMIN_ONLY_MCPS`, `src/auth/admin.ts`) — and a curl-able REST data plane under `/api/v1/*`.
 
 ## Tool Inventory
 
@@ -19,6 +19,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/github/CLAUDE.md` — GitHub
 - `src/google-calendar/CLAUDE.md` — Google Calendar
 - `src/google-docs/CLAUDE.md` — Google Docs, including its parameter patterns and the tools that throw (`NOT_IMPLEMENTED`)
+- `src/google-drive/CLAUDE.md` — Google Drive: search, change feed, upload
 - `src/google-gmail/CLAUDE.md` — Gmail
 - `src/google-sheets/CLAUDE.md` — Google Sheets
 - `src/hubspot/CLAUDE.md` — HubSpot
@@ -29,6 +30,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - `src/redmine/CLAUDE.md` — Redmine
 - `src/slack/CLAUDE.md` — Slack shared code and the `slack-bot` server
 - `src/slack-user/CLAUDE.md` — Slack user server and its access rules
+- `src/sandbox/CLAUDE.md` — Sandbox MCP and its runner service: Pyodide under Deno (why never Node), per-run REST bearer, egress allowlist, quotas that fail closed
 - `src/storage/CLAUDE.md` — Storage MCP: per-user schema-enforced collections, migrations, quotas
 - `src/supabase/CLAUDE.md` — Supabase (hosted-MCP proxy, modern protocol)
 - `src/usage/CLAUDE.md` — usage analytics (`tool_call_events`): what is recorded, what never is
@@ -50,7 +52,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - **Only the proxy's own auth middleware may set `x-mcp-user-id` / `-email` / `-sub`.** FastMCP's `authenticateRequest` trusts them from loopback, and every proxied request reaches it from loopback, so a client-supplied one forwarded untouched signs the caller in as any user id on any MCP. `resourceServerMiddleware` strips them first thing (`stripTrustedIdentityHeaders`) because its dual-mode API-key paths call `next()` without identifying anyone; `mcpOnlyMiddleware` strips them too and answers any non-401 rejection (403, 503) instead of proxying an unidentified request. `src/__tests__/mcpIdentityHeaders.test.ts` puts an echo server behind the real proxy to check what arrives.
 - **An Auth0 identity links to an existing account only by a VERIFIED email** (`mapJwtToUser`, `src/auth/userMapping.ts`). An unverified address is refused with 403 `email_not_verified` when an account already uses it, and is never stored as a new account's email — otherwise anyone able to register an address at the identity provider could sign in as its owner, admins included (`ADMIN_EMAILS` is matched by email). `email_verified` is read from the JWT claim and from `/userinfo`; if the tenant's Action adds `email` to access tokens it must add `email_verified` too, or an existing account's first JWT sign-in is refused (already-linked accounts are unaffected).
 - **An MCP instance is addressed in the path: `/mcp/<instanceId>`** — Claude Code's connector list has no query strings and it dedups by URL, so `?instanceId=` (kept for existing connectors) collapses two instances into one. A new proxy mount also needs `registerInstanceResourceMetadata`, or OAuth discovery fails on its path form. Verified against FastMCP and the MCP SDK client; UNVERIFIED in Claude Code itself.
-- **New OAuth scopes need already-connected users to reconnect** — a token keeps the scopes it was minted with. Never seed a scope string the provider does not define: an unknown scope fails the whole consent flow.
+- **New OAuth scopes need already-connected users to reconnect** — a token keeps the scopes it was minted with. Never seed a scope string the provider does not define: an unknown scope fails the whole consent flow. The release notes say so automatically: `.github/scripts/detect-scope-changes.mjs` diffs each seed's `oauthScopes` against the previous tag and adds an "Action needed" reconnect section — so keep `oauthScopes` as string literals or an imported `const` array, which is all it can read.
 - **Hidden connectors seed `isActive` from `<NAME>_ENABLED`** — strict `=== 'true'`, so anything else (including unset) means `false`; flipping it is a restart, not a deploy. Seed rather than skip, so existing connections are not orphaned.
 - **Reconnect merges keep any non-empty `providerTokens.accessRules`** (`PRESERVED_ON_RECONNECT`). To clear rules, delete the key — `{}` is non-empty and would survive every reconnect.
 - **`sharedToolsRegistration.test.ts` strips whole-line `//` comments before block comments.** The order is load-bearing: a line comment ending in `/` + `*` would otherwise swallow the registration calls after it.
@@ -65,7 +67,9 @@ Per-provider files are listed in each provider's `CLAUDE.md`.
 | `src/restCatalog.ts` | Single source of truth for the REST plane (drives `docs/REST_ENDPOINTS.md` and the OpenAPI specs) |
 | `src/mcpInstancePath.ts` | `/mcp/<instanceId>` — the path form of an instance URL: the proxy rewrite and the per-instance `resource_metadata` URL |
 | `src/util/mcpProxyClient.ts` | Streamable-HTTP MCP transport shared by Browserbase, Pinecone and Supabase: per-call transport, SSE frames, the legacy `initialize` path and the stateless `protocol: 'modern'` path; a replica-affine session is never cached |
+| `src/util/firstPartyConnect.ts` | `connectFirstPartyMcp` — one-click, one-per-user connect for the no-credential connectors (Storage, Sandbox) |
 | `src/util/baseUrlGuard.ts` | `isPrivateHost` + `checkBaseUrl` — SSRF guard for the self-hosted connectors (Outline, Redmine) |
+| `src/util/pinnedHttps.ts` | `pinnedHttpsRequest` — https request whose DNS lookup refuses private addresses, so the checked address is the connected one (Outline attachment uploads) |
 | `src/util/oauthTokenGrant.ts` | `postTokenGrant` — shared OAuth token-endpoint POST (HubSpot, Redmine) |
 | `src/website/webServer.ts` | Express app, proxy routes, registration/OAuth pages, REST routes |
 | `src/website/restUpstreamError.ts` | `sendUpstreamError` — the shared 404/403/500 mapper for REST handlers |

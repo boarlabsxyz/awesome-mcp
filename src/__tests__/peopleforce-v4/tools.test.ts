@@ -73,6 +73,7 @@ describe('registered tool surface', () => {
       'createPerson', 'updatePerson', 'createDepartment', 'updateDepartment', 'createLocation', 'updateLocation',
       'createDivision', 'updateDivision', 'createJobTitle', 'updateJobTitle',
       'createJobLevel', 'updateJobLevel', 'createWorkType', 'updateWorkType',
+      'listLeaveRequests', 'listLeaveBalances',
     ]) {
       assert.ok(toolMap.has(name), `missing tool: ${name}`);
     }
@@ -205,5 +206,36 @@ describe('unconnected session', () => {
       () => tool.execute({ page: 1 }, { log, session: { peopleForceAccessToken: 'company-key' } as any }),
       /Service account/,
     );
+  });
+});
+
+describe('listLeaveRequests date bounds', () => {
+  const page = (rows: unknown[], meta: Record<string, number>) => {
+    globalThis.fetch = (async (input: any, init: any = {}) => {
+      calls.push({ url: input.toString(), method: init.method });
+      return {
+        ok: true, status: 200, json: async () => ({ data: rows, metadata: meta }), text: async () => '',
+        headers: new Headers({ 'content-type': 'application/json' }),
+      } as any as Response;
+    }) as any;
+  };
+
+  test('sends from as ends_on and names the rows the to bound hid, with more pages to come', async () => {
+    page([
+      { id: 1, starts_on: '2026-07-02', ends_on: '2026-07-03', state: 'approved' },
+      { id: 2, starts_on: '2026-09-01', ends_on: '2026-09-02', state: 'approved' },
+    ], { page: 1, per_page: 2, total_pages: 3, total_count: 6 });
+    const tool = toolMap.get('listLeaveRequests')!;
+    const out = await tool.execute(tool.parameters.parse({ from: '2026-07-01', to: '2026-07-31' }), { log, session });
+    assert.equal(new URL(calls[0].url).searchParams.get('ends_on'), '2026-07-01');
+    assert.match(out, /1 of 2 request\(s\) on this page start after 2026-07-31 and are hidden\. Later pages may still hold matches/);
+    assert.match(out, /#1 /);
+    assert.doesNotMatch(out, /#2 /);
+  });
+
+  test('a 403 names the Time off permission', async () => {
+    globalThis.fetch = (async () => ({ ok: false, status: 403, text: async () => 'forbidden', headers: new Headers() })) as any;
+    const tool = toolMap.get('listLeaveBalances')!;
+    await assert.rejects(() => tool.execute(tool.parameters.parse({}), { log, session }), /Time off permission/);
   });
 });

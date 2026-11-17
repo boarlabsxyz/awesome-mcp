@@ -275,6 +275,13 @@
                     ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
+                  },
+                  "recurrence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Make it a recurring series: RFC 5545 lines such as RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10. Requires timeZone; without it the request is a 400."
                   }
                 }
               }
@@ -493,6 +500,22 @@
                     ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
+                  },
+                  "addAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Invite these guests; everyone already invited, and their responses, are kept."
+                  },
+                  "removeAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Uninvite these guests. Every address must be on the event, or nothing changes (400)."
                   }
                 }
               }
@@ -730,6 +753,22 @@
                     ],
                     "default": "none",
                     "description": "Whether to send email notifications to attendees"
+                  },
+                  "addAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Invite these guests; everyone already invited, and their responses, are kept."
+                  },
+                  "removeAttendees": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "description": "Uninvite these guests. Every address must be on the event, or nothing changes (400)."
                   }
                 }
               }
@@ -3946,6 +3985,197 @@
         }
       }
     },
+    "/api/v1/clickup/workspaces/{workspaceId}/attachments": {
+      "get": {
+        "operationId": "downloadClickUpAttachment",
+        "summary": "Download a file ClickUp hosts as an attachment (a recording or image linked from a doc or task)",
+        "description": "Streams the bytes of a file on ClickUp's attachments CDN, fetched with the connection's token, and forwards a bytes Range header (206, or 416 with Content-Range). These URLs are not public, so a plain request gets the ClickUp sign-in page; this route refuses that page and the sign-in redirect with 403 instead of saving them as the file. Mirrors the MCP tool getAttachmentInfo, which reports the name, type and size without downloading. Whether ClickUp accepts the OAuth token on its attachments host is UNVERIFIED live.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID: the digits after \"t\" in the attachment host."
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The attachment URL exactly as it appears in the doc or task: https://t{workspaceId}.p.clickup-attachments.com/t{workspaceId}/... Any other host is refused, because this server fetches it with the connection's token."
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A bytes range to fetch (bytes=start-end, several comma-separated), e.g. to resume a download. Any other unit is 400."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file, with the Content-Type ClickUp serves it with (application/octet-stream when it sends none).",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Content-Disposition": {
+                "description": "attachment, with the file name from the URL's filename parameter or its last path segment.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range of the file, with the Content-Type ClickUp serves it with.",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Content-Disposition": {
+                "description": "attachment, with the file name from the URL's filename parameter or its last path segment.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "description": "bytes start-end/total",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "url missing, not this workspace's attachments host, or the Range header is not a bytes range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ClickUp did not accept the connection's token for this file, or denied access to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workspace not visible to this ClickUp connection, or the attachment does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Requested range not satisfiable",
+            "headers": {
+              "Content-Range": {
+                "description": "bytes */total, when ClickUp sends it",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "ClickUp rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "ClickUp's attachments host failed, or redirected outside it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "ClickUp's attachments host did not answer within 30s",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clickup/spaces/{spaceId}/tags": {
       "get": {
         "operationId": "listClickUpSpaceTags",
@@ -6142,6 +6372,10 @@
                   "tabId": {
                     "type": "string",
                     "description": "Optional tab ID. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
                   }
                 },
                 "required": [
@@ -6241,7 +6475,7 @@
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 50,
-                    "description": "Each operation needs a `type` plus that type fields. Types: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list.",
+                    "description": "Each operation needs a `type` plus that type fields. Types: insert_text, delete_text, replace_text, format_text, update_paragraph_style, insert_table, insert_page_break, find_replace, create_bullet_list. Every operation takes an optional tabId; create_bullet_list takes bulletPreset (NUMBERED_* for a numbered list, BULLET_CHECKBOX for a checklist).",
                     "items": {
                       "type": "object",
                       "required": [
@@ -6269,6 +6503,10 @@
                   "suggestMode": {
                     "type": "boolean",
                     "description": "If true the whole batch is applied as tracked SUGGESTIONS for a human to accept or reject, and the document itself is unchanged until someone does."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
                   }
                 },
                 "required": [
@@ -6494,6 +6732,10 @@
                   "tabId": {
                     "type": "string",
                     "description": "Optional tab ID. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
                   }
                 },
                 "required": [
@@ -6603,6 +6845,14 @@
                   "style": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
                   }
                 },
                 "required": [
@@ -6719,6 +6969,14 @@
                   "style": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from a read. If the document changed since, Google rejects the edit (400) and nothing is written. The response carries the new revisionId."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
                   }
                 },
                 "required": [
@@ -8688,6 +8946,805 @@
         }
       }
     },
+    "/api/v1/docs/{documentId}/tables/structure": {
+      "post": {
+        "operationId": "modifyDocTableStructure",
+        "summary": "Insert table rows or columns, or merge and unmerge cells",
+        "description": "The table is named by its start index (GET /structure). It is read first, so a wrong index or an out-of-range cell is a 400 naming the table sizes. Deleting rows or columns is MCP-only.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tableStartIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The start index of the table, from inspectDocStructure (elements of type table)."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID the table is in. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "insert_rows_above",
+                      "insert_rows_below",
+                      "insert_columns_left",
+                      "insert_columns_right",
+                      "merge_cells",
+                      "unmerge_cells"
+                    ],
+                    "description": "What to do. Inserts are relative to the cell at rowIndex/columnIndex; merge/unmerge act on the cell block starting there."
+                  },
+                  "rowIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based row of the reference (or top-left) cell."
+                  },
+                  "columnIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based column of the reference (or top-left) cell."
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "For inserts: how many rows or columns to add (1-20). Defaults to 1."
+                  },
+                  "rowSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "For merge/unmerge: rows in the block. Defaults to 1."
+                  },
+                  "columnSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "For merge/unmerge: columns in the block. Defaults to 1."
+                  }
+                },
+                "required": [
+                  "tableStartIndex",
+                  "action",
+                  "rowIndex",
+                  "columnIndex"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Table changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "tableBefore": {
+                      "type": "object",
+                      "properties": {
+                        "rows": {
+                          "type": "integer"
+                        },
+                        "columns": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "tableAfter": {
+                      "type": "object",
+                      "properties": {
+                        "rows": {
+                          "type": "integer"
+                        },
+                        "columns": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tables/cell-style": {
+      "post": {
+        "operationId": "formatDocTableCells",
+        "summary": "Format table cells: background, alignment, padding, borders, row height, column width",
+        "description": "Omit rowIndex and columnIndex for the whole table; naming only one formats that row or column across the table. Border parts left out default to black, 1pt, SOLID.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tableStartIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The start index of the table, from inspectDocStructure (elements of type table)."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID the table is in. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits."
+                  },
+                  "rowIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based first row of the cell block. Omit row and column to format the whole table."
+                  },
+                  "columnIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based first column of the cell block."
+                  },
+                  "rowSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Rows in the block. Defaults to 1 when rowIndex is given."
+                  },
+                  "columnSpan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Columns in the block. Defaults to 1 when columnIndex is given."
+                  },
+                  "backgroundColor": {
+                    "type": "string",
+                    "description": "Cell background color, hex (e.g. \"#FFF2CC\")."
+                  },
+                  "contentAlignment": {
+                    "type": "string",
+                    "enum": [
+                      "TOP",
+                      "MIDDLE",
+                      "BOTTOM"
+                    ],
+                    "description": "Vertical alignment of cell content."
+                  },
+                  "paddingPt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Padding on all four sides, in points."
+                  },
+                  "borderColor": {
+                    "type": "string",
+                    "description": "Color of all four cell borders, hex."
+                  },
+                  "borderWidthPt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Width of all four cell borders, in points. 0 hides them."
+                  },
+                  "borderDashStyle": {
+                    "type": "string",
+                    "enum": [
+                      "SOLID",
+                      "DOT",
+                      "DASH"
+                    ],
+                    "description": "Dash style of all four cell borders."
+                  },
+                  "minRowHeightPt": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "Minimum height, in points, of every row the block covers."
+                  },
+                  "columnWidthPt": {
+                    "type": "number",
+                    "minimum": 5,
+                    "description": "Fixed width, in points (min 5), of every column the block covers."
+                  }
+                },
+                "required": [
+                  "tableStartIndex"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cells formatted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "cells": {
+                      "type": "object",
+                      "properties": {
+                        "rowIndex": {
+                          "type": "integer"
+                        },
+                        "columnIndex": {
+                          "type": "integer"
+                        },
+                        "rowSpan": {
+                          "type": "integer"
+                        },
+                        "columnSpan": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "cellStyleFields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "rowHeightSet": {
+                      "type": "boolean"
+                    },
+                    "columnWidthSet": {
+                      "type": "boolean"
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tabs": {
+      "post": {
+        "operationId": "createDocumentTab",
+        "summary": "Add a tab, optionally nested under another",
+        "description": "Answers 201 with the new tab as Google reported it. Deleting a tab is MCP-only.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title of the new tab. Google names it \"Tab N\" if omitted."
+                  },
+                  "parentTabId": {
+                    "type": "string",
+                    "description": "Optional: create the tab nested under this tab (from listDocumentTabs). Omit for a top-level tab."
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional zero-based position among its sibling tabs. Defaults to last."
+                  },
+                  "iconEmoji": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional single emoji shown as the tab icon."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tab created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "tabId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "index": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "parentTabId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nestingLevel": {
+                      "type": "integer"
+                    },
+                    "iconEmoji": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listDocumentTabs",
+        "summary": "List tabs in a Google Doc",
+        "description": "List tabs in a Google Doc. Mirrors the MCP tool `listDocumentTabs`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "docs"
+        ],
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/tabs/{tabId}/update": {
+      "post": {
+        "operationId": "updateDocumentTab",
+        "summary": "Rename a tab, change its icon or move it among its siblings",
+        "description": "Re-reads the tab after writing: confirmed is true only when every changed field reads back as requested.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          },
+          {
+            "name": "tabId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The tab ID (from GET /tabs)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New title for the tab."
+                  },
+                  "iconEmoji": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New single-emoji icon for the tab."
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "New zero-based position among its sibling tabs."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tab updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "tabId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "index": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "parentTabId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nestingLevel": {
+                      "type": "integer"
+                    },
+                    "iconEmoji": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "updatedFields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "confirmed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/footnotes": {
+      "post": {
+        "operationId": "createDocFootnote",
+        "summary": "Add a footnote with its text at a body index",
+        "description": "Two writes: the reference, then the text into the new footnote. If the second fails the 400 names the empty footnote left behind.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Document ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "1-based index in the body where the footnote reference number goes. Must be inside a paragraph."
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The footnote text."
+                  },
+                  "tabId": {
+                    "type": "string",
+                    "description": "Optional tab ID. Defaults to the first tab."
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional revisionId from readGoogleDoc or inspectDocStructure. If anyone changed the document since that revision, Google rejects the edit and nothing is written. The response returns the new revisionId to chain edits."
+                  }
+                },
+                "required": [
+                  "index",
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Footnote created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "documentId": {
+                      "type": "string"
+                    },
+                    "footnoteId": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (Zod issues keyed by field), or a refusal the caller can fix: unknown tab, no table at that index, cell block outside the table, stale requiredRevisionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/drive/files/{fileId}": {
       "get": {
         "operationId": "getFileInfo",
@@ -8947,6 +10004,15 @@
               "maximum": 1000
             },
             "description": "Maximum number of items to return"
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "nextPageToken from the previous page."
           }
         ],
         "responses": {
@@ -8965,6 +10031,11 @@
                       "items": {
                         "$ref": "#/components/schemas/File"
                       }
+                    },
+                    "nextPageToken": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Non-null when more items remain."
                     }
                   }
                 }
@@ -9075,6 +10146,477 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files": {
+      "get": {
+        "operationId": "searchDriveFiles",
+        "summary": "Search all of Drive by name or content, or list recent files",
+        "description": "Any file type and folder. Omit q for the most recently modified files. Paginated with nextPageToken; incompleteSearch true means Drive skipped some locations. A fullText search is ordered by relevance.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Text to look for. Omit to list the most recently modified files."
+          },
+          {
+            "name": "searchIn",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "content",
+                "both"
+              ],
+              "default": "both"
+            },
+            "description": "Match the query against file names, file content, or both."
+          },
+          {
+            "name": "mimeType",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional type filter: document, spreadsheet, presentation, folder, form, pdf, or any MIME type (e.g. \"image/png\")."
+          },
+          {
+            "name": "modifiedAfter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only files modified after this RFC 3339 time, e.g. \"2026-11-01T00:00:00Z\"."
+          },
+          {
+            "name": "includeTrashed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Include files in the trash."
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Files per page (1-100)."
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "nextPageToken from a previous call, to get the next page."
+          },
+          {
+            "name": "includeSharedDrives",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Include items from shared drives. Defaults to true."
+          },
+          {
+            "name": "driveId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter to a specific shared drive ID."
+          },
+          {
+            "name": "corpora",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "user",
+                "drive",
+                "allDrives",
+                "domain"
+              ]
+            },
+            "description": "Source of files: user (My Drive), drive (specific), allDrives, domain."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "mimeType": {
+                            "type": "string"
+                          },
+                          "modifiedTime": {
+                            "type": "string"
+                          },
+                          "webViewLink": {
+                            "type": "string"
+                          },
+                          "driveId": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "nextPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "incompleteSearch": {
+                      "type": "boolean"
+                    },
+                    "sortedBy": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "uploadDriveFile",
+        "summary": "Upload a file, optionally converting it to a Google Doc, Sheet or Slides",
+        "description": "Body limit 5mb (about 3.7 MB of file as base64). Not idempotent. convertTo is checked against what Drive can import from sourceMimeType.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name for the file in Drive, e.g. \"budget.xlsx\"."
+                  },
+                  "sourceMimeType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MIME type of the content, e.g. \"text/csv\", \"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\", \"application/pdf\"."
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The file bytes, base64-encoded. Give this or textContent."
+                  },
+                  "textContent": {
+                    "type": "string",
+                    "description": "The file as UTF-8 text (CSV, Markdown, HTML, plain text). Give this or contentBase64."
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "Folder (or shared drive) to put it in. Defaults to My Drive root."
+                  },
+                  "convertTo": {
+                    "type": "string",
+                    "enum": [
+                      "document",
+                      "spreadsheet",
+                      "presentation"
+                    ],
+                    "description": "Convert into a native Google Doc, Sheet or Slides file. Checked against what Drive can import from sourceMimeType."
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "sourceMimeType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "file": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "mimeType": {
+                          "type": "string"
+                        },
+                        "modifiedTime": {
+                          "type": "string"
+                        },
+                        "webViewLink": {
+                          "type": "string"
+                        },
+                        "driveId": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "converted": {
+                      "type": "boolean",
+                      "description": "true only when Drive stored it as the requested Google type."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, both or neither content field, over 20 MB, or a conversion Drive cannot do",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Parent folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/changes": {
+      "get": {
+        "operationId": "listDriveChanges",
+        "summary": "Follow the Drive change feed",
+        "description": "Without pageToken returns startPageToken and no changes. nextPageToken means more changes now; newStartPageToken means the end of the feed, poll later with it.",
+        "parameters": [
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Token from a previous call (newStartPageToken or nextPageToken). Omit on the first call to get a starting token: changes are recorded from that moment on."
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "description": "Changes per page (1-1000)."
+          },
+          {
+            "name": "driveId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional shared drive ID, to follow that drive instead of My Drive."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "changeType": {
+                            "type": "string"
+                          },
+                          "time": {
+                            "type": "string"
+                          },
+                          "removed": {
+                            "type": "boolean"
+                          },
+                          "fileId": {
+                            "type": "string"
+                          },
+                          "file": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "mimeType": {
+                                "type": "string"
+                              },
+                              "modifiedTime": {
+                                "type": "string"
+                              },
+                              "webViewLink": {
+                                "type": "string"
+                              },
+                              "driveId": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "startPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nextPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "newStartPageToken": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
             "content": {
               "application/json": {
                 "schema": {
@@ -13991,6 +15533,291 @@
         }
       }
     },
+    "/api/v1/gmail/filters": {
+      "get": {
+        "operationId": "listGmailFilters",
+        "summary": "List Gmail filters",
+        "responses": {
+          "200": {
+            "description": "Filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filters": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "criteria": {
+                            "type": "object"
+                          },
+                          "action": {
+                            "type": "object",
+                            "properties": {
+                              "addLabelIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "removeLabelIds": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGmailFilter",
+        "summary": "Create a Gmail filter for incoming mail",
+        "description": "Applies to mail arriving afterwards. Needs at least one criterion and one action.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "query": {
+                    "type": "string",
+                    "description": "Gmail search query"
+                  },
+                  "negatedQuery": {
+                    "type": "string"
+                  },
+                  "hasAttachment": {
+                    "type": "boolean"
+                  },
+                  "addLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "removeLabelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "archive": {
+                    "type": "boolean",
+                    "description": "Remove INBOX"
+                  },
+                  "markRead": {
+                    "type": "boolean",
+                    "description": "Remove UNREAD"
+                  },
+                  "star": {
+                    "type": "boolean",
+                    "description": "Add STARRED"
+                  },
+                  "neverSpam": {
+                    "type": "boolean",
+                    "description": "Remove SPAM"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Filter created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "criteria": {
+                      "type": "object"
+                    },
+                    "action": {
+                      "type": "object",
+                      "properties": {
+                        "addLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "removeLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No criterion, no action, or a bad label ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gmail/filters/{filterId}": {
+      "get": {
+        "operationId": "getGmailFilter",
+        "summary": "Get one Gmail filter",
+        "parameters": [
+          {
+            "name": "filterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "criteria": {
+                      "type": "object"
+                    },
+                    "action": {
+                      "type": "object",
+                      "properties": {
+                        "addLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "removeLabelIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied; a connection made before filters were added gets an error naming Reconnect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filter not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/gmail/drafts": {
       "post": {
         "operationId": "createDraft",
@@ -14003,8 +15830,6 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "to",
-                  "subject",
                   "body"
                 ],
                 "properties": {
@@ -14032,6 +15857,10 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Whether the body content is HTML"
+                  },
+                  "replyToMessageId": {
+                    "type": "string",
+                    "description": "Draft a reply in this message's conversation (threadId, In-Reply-To, References, Re: subject). to and subject default from the original; without this field both are required."
                   }
                 }
               }
@@ -14053,6 +15882,15 @@
                     "messageId": {
                       "type": "string",
                       "description": "ID of the draft message"
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Conversation the draft belongs to"
+                    },
+                    "threaded": {
+                      "type": "boolean",
+                      "description": "Only with replyToMessageId: whether Gmail put the draft in the original conversation"
                     }
                   }
                 }
@@ -17612,6 +19450,19 @@
                   "icon": {
                     "type": "string",
                     "description": "Emoji icon."
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+                    "description": "Icon colour, hex like #FF0000."
+                  },
+                  "fullWidth": {
+                    "type": "boolean",
+                    "description": "Display the document full width."
+                  },
+                  "templateId": {
+                    "type": "string",
+                    "description": "Start from this template (from listTemplates). Its content is used when text is empty."
                   }
                 }
               }
@@ -17753,7 +19604,7 @@
       "post": {
         "operationId": "updateOutlineDocument",
         "summary": "Update an Outline document",
-        "description": "REPLACES title and text unless append is true. append is ignored unless text is supplied. An empty-string icon CLEARS the icon; omitting it leaves it alone.",
+        "description": "REPLACES title and text unless append is true. append is ignored unless text is supplied. An empty-string icon CLEARS the icon; omitting it leaves it alone. With findText, only the first exact occurrence of that markdown is replaced by text (400 if absent, checked before writing); an Outline too old for passage edits is detected, the original text written back, and the call answers 502.",
         "parameters": [
           {
             "name": "documentId",
@@ -17791,6 +19642,27 @@
                   "icon": {
                     "type": "string",
                     "description": "Emoji icon. An empty string clears it."
+                  },
+                  "findText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Edit one passage: replace the first exact occurrence of this markdown with text, keeping the rest of the document and its formatting untouched. Needs a recent Outline."
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+                    "description": "Icon colour, hex like #FF0000."
+                  },
+                  "fullWidth": {
+                    "type": "boolean",
+                    "description": "Display the document full width (true) or normal width (false)."
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ],
+                    "description": "Publish a draft. To return a published document to draft, use unpublishDocument."
                   }
                 }
               }
@@ -18142,6 +20014,19 @@
                   "parentCommentId": {
                     "type": "string",
                     "description": "Reply to this comment instead of starting a thread."
+                  },
+                  "anchorText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Make it an inline comment on this exact text in the document (first occurrence unless anchorPrefix/anchorSuffix narrow it). Needs a recent Outline."
+                  },
+                  "anchorPrefix": {
+                    "type": "string",
+                    "description": "Text just before anchorText, to pick the right occurrence."
+                  },
+                  "anchorSuffix": {
+                    "type": "string",
+                    "description": "Text just after anchorText, to pick the right occurrence."
                   }
                 }
               }
@@ -18765,6 +20650,10 @@
                     "type": "string",
                     "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
                     "description": "Hex colour like #RRGGBB or #RGB."
+                  },
+                  "icon": {
+                    "type": "string",
+                    "description": "Optional icon: an emoji, or an Outline icon name."
                   }
                 }
               }
@@ -18872,6 +20761,11 @@
                     "nullable": true,
                     "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
                     "description": "New hex color. Pass null to clear it."
+                  },
+                  "icon": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "New icon (emoji or Outline icon name). Pass null to clear it."
                   }
                 }
               }
@@ -19325,6 +21219,1435 @@
                       "type": "string"
                     },
                     "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/unpublish": {
+      "post": {
+        "operationId": "unpublishOutlineDocument",
+        "summary": "Return a published Outline document to draft",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "detach": {
+                    "type": "boolean",
+                    "description": "Also take it out of its collection (default: stays in place as a draft)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Document, now a draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/import": {
+      "post": {
+        "operationId": "importOutlineHtmlDocument",
+        "summary": "Create an Outline document from HTML",
+        "description": "Runs the Outline importer: remote and base64 images in the HTML are copied in as attachments. Not idempotent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "html": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The HTML to import. Remote and base64 images in it are copied into Outline as attachments."
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "File name used for the import; Outline takes the title from the HTML <title> or first heading, else this."
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "Collection to import into. Give this or parentDocumentId."
+                  },
+                  "parentDocumentId": {
+                    "type": "string",
+                    "description": "Import as a child of this document. Give this or collectionId."
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Publish immediately (default true) or leave a draft."
+                  }
+                },
+                "required": [
+                  "html"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/attachments": {
+      "post": {
+        "operationId": "uploadOutlineAttachment",
+        "summary": "Upload a file to Outline as an attachment",
+        "description": "Creates the attachment record and sends the bytes. Not inserted into any document: put the returned markdown in with the update route.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "File name, e.g. \"diagram.png\"."
+                  },
+                  "contentType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MIME type, e.g. \"image/png\", \"application/pdf\"."
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The file bytes, base64-encoded. Give this or textContent."
+                  },
+                  "textContent": {
+                    "type": "string",
+                    "description": "The file as UTF-8 text. Give this or contentBase64."
+                  },
+                  "documentId": {
+                    "type": "string",
+                    "description": "Document the attachment belongs to (needs edit access to it). It is not inserted: put the returned markdown into the document with updateDocument."
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "contentType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attachmentId": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "markdown": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/collections/{collectionId}/archive": {
+      "post": {
+        "operationId": "archiveOutlineCollection",
+        "summary": "Archive an Outline collection and the documents in it",
+        "description": "Hides the collection and its documents from the sidebar and search; deletes nothing. Reversible via the restore route.",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline collection ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Optional reason, shown on the archived collection."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Collection archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/collections/{collectionId}/restore": {
+      "post": {
+        "operationId": "restoreOutlineCollection",
+        "summary": "Restore an archived Outline collection",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline collection ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/update": {
+      "post": {
+        "operationId": "updateOutlineComment",
+        "summary": "Edit the text of an Outline comment",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New comment text (markdown). Replaces the old text. Only the author (or an admin) can edit."
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comment updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutlineComment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/resolve": {
+      "post": {
+        "operationId": "resolveOutlineComment",
+        "summary": "Resolve an Outline comment thread",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "comment": {
+                      "$ref": "#/components/schemas/OutlineComment"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "From the returned resolvedAt; null when Outline omits it."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/reopen": {
+      "post": {
+        "operationId": "reopenOutlineComment",
+        "summary": "Reopen a resolved Outline comment thread",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "comment": {
+                      "$ref": "#/components/schemas/OutlineComment"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/users": {
+      "get": {
+        "operationId": "listOutlineUsers",
+        "summary": "List or search Outline workspace users",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search by name or email"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "active",
+                "invited",
+                "suspended"
+              ]
+            },
+            "description": "Status filter"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/users/{userId}": {
+      "get": {
+        "operationId": "getOutlineUser",
+        "summary": "Read an Outline user profile",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline user ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/templates": {
+      "get": {
+        "operationId": "listOutlineTemplates",
+        "summary": "List Outline templates",
+        "description": "Needs an Outline with the templates API (404 on older servers).",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by title"
+          },
+          {
+            "name": "collectionId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only templates of this collection"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/templates/{templateId}": {
+      "get": {
+        "operationId": "getOutlineTemplate",
+        "summary": "Read an Outline template",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline template ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/revisions": {
+      "get": {
+        "operationId": "listOutlineDocumentRevisions",
+        "summary": "List the saved versions of an Outline document",
+        "description": "Newest first, without bodies.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/revisions/{revisionId}": {
+      "get": {
+        "operationId": "getOutlineRevision",
+        "summary": "Read one saved version of an Outline document",
+        "parameters": [
+          {
+            "name": "revisionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The revision ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/compare": {
+      "get": {
+        "operationId": "compareOutlineDocumentRevisions",
+        "summary": "Diff two versions of an Outline document",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The older revision ID"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The newer revision ID; omit for the current document"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Line diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "to": {},
+                    "added": {
+                      "type": "integer"
+                    },
+                    "removed": {
+                      "type": "integer"
+                    },
+                    "summarized": {
+                      "type": "boolean"
+                    },
+                    "diff": {
                       "type": "string"
                     }
                   }
@@ -23515,6 +26838,505 @@
                   }
                 },
                 "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/salaries": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeSalaries",
+        "summary": "List an employee salary history",
+        "description": "v3. Amount, currency, pay period, effective date and compensation component. Needs a Company API key allowed to view compensation; otherwise 403.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/holidays": {
+      "get": {
+        "operationId": "listPeopleForceHolidays",
+        "summary": "List company public holidays",
+        "description": "v3. working: true marks a working-day exception, not a day off; observed_on and compensated_on say when the day off is actually taken.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/holiday-policies": {
+      "get": {
+        "operationId": "listPeopleForceHolidayPolicies",
+        "summary": "List holiday policies",
+        "description": "List holiday policies",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/holidays": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeHolidays",
+        "summary": "List the public holidays that apply to one employee",
+        "description": "v3, from the employee location holiday policy. Paginated.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/absences": {
+      "get": {
+        "operationId": "getPeopleForceEmployeeAbsences",
+        "summary": "Leave and public holidays for one employee between two dates",
+        "description": "Approved leave (plus pending with includePending=true) and the public holidays of the employee holiday policy, filtered for overlap with from..to. truncated names any source that stopped after 10 pages.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First day, YYYY-MM-DD.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last day, YYYY-MM-DD.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "includePending",
+            "in": "query",
+            "required": false,
+            "description": "Also list leave requests awaiting approval.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "employeeId": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "leave": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "holidays": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "truncated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "from and to missing, not YYYY-MM-DD, or from after to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
               }
             }
           }
@@ -29917,6 +33739,15 @@
                   "range": {
                     "type": "string",
                     "description": "The A1 notation range to read (e.g., 'Sheet1!A1:D10')"
+                  },
+                  "valueRenderOption": {
+                    "type": "string",
+                    "enum": [
+                      "FORMATTED_VALUE",
+                      "UNFORMATTED_VALUE",
+                      "FORMULA"
+                    ],
+                    "description": "FORMATTED_VALUE (default) as displayed; UNFORMATTED_VALUE the raw value; FORMULA the formula text."
                   }
                 }
               }
@@ -30237,7 +34068,7 @@
       "post": {
         "operationId": "batchUpdateSpreadsheet",
         "summary": "Apply formatting and sheet-lifecycle operations atomically",
-        "description": "Applies an ordered list of operations in a single atomic batch: if one is rejected, none of them apply. Sheet names are resolved against the live spreadsheet. appendDimension and insertDimension grow the grid, which /write does not do: a tab is 1000 rows and a taller write fails with \"exceeds grid limits\" until rows are added (or the tab is created at size with addSheet rowCount/columnCount). WARNING: the deleteSheet operation destroys a tab and every value on it, and there is no confirmation step on this plane.",
+        "description": "Applies an ordered list of operations in a single atomic batch: if one is rejected, none of them apply. Sheet names are resolved against the live spreadsheet. appendDimension and insertDimension grow the grid, which /write does not do: a tab is 1000 rows and a taller write fails with \"exceeds grid limits\" until rows are added (or the tab is created at size with addSheet rowCount/columnCount). WARNING: the deleteSheet operation destroys a tab and every value on it, and there is no confirmation step on this plane. alignment sets horizontal/vertical alignment and text wrapping; dataValidation adds dropdowns, checkboxes and number or formula rules (rule.kind clear removes them); addChart creates a native chart from a block with a header row (first column categories, further columns series). Deleting rows or columns is MCP-only.",
         "parameters": [
           {
             "name": "spreadsheetId",
@@ -30287,7 +34118,10 @@
                             "duplicateSheet",
                             "addSheet",
                             "appendDimension",
-                            "insertDimension"
+                            "insertDimension",
+                            "alignment",
+                            "dataValidation",
+                            "addChart"
                           ]
                         }
                       },
@@ -30323,6 +34157,13 @@
                         "type": "string"
                       },
                       "description": "One line per operation, in order, for auditing a large batch."
+                    },
+                    "chartIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "description": "IDs of charts created by addChart operations, in order."
                     }
                   }
                 }
@@ -30456,6 +34297,157 @@
           },
           "404": {
             "description": "Spreadsheet or calendar resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/cells": {
+      "get": {
+        "operationId": "inspectSpreadsheetCells",
+        "summary": "Inspect cells: formulas, raw and displayed values, formatting, links, notes, validation",
+        "description": "Read-only. Lists non-empty cells only, capped by maxCells. A cell holding several links has no hyperlink; its links are listed under links (from textFormatRuns).",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A1 range, e.g. Sheet1!A1:D20"
+          },
+          {
+            "name": "maxCells",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000,
+              "default": 500
+            },
+            "description": "Cap on cells listed."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "sheetTitle": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "range": {
+                      "type": "string"
+                    },
+                    "cells": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "cell": {
+                            "type": "string"
+                          },
+                          "formula": {
+                            "type": "string"
+                          },
+                          "userEnteredValue": {
+                            "type": "object"
+                          },
+                          "effectiveValue": {
+                            "type": "object"
+                          },
+                          "formattedValue": {
+                            "type": "string"
+                          },
+                          "format": {
+                            "type": "object"
+                          },
+                          "hyperlink": {
+                            "type": "string"
+                          },
+                          "links": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "note": {
+                            "type": "string"
+                          },
+                          "dataValidation": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    },
+                    "nonEmptyCells": {
+                      "type": "integer"
+                    },
+                    "truncated": {
+                      "type": "boolean",
+                      "description": "true when maxCells cut the list short."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid range or maxCells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -30697,6 +34689,10 @@
                       "description": "A single update request (e.g., createSlide, insertText, deleteObject, replaceAllText)"
                     },
                     "description": "A list of updates to apply to the presentation"
+                  },
+                  "requiredRevisionId": {
+                    "type": "string",
+                    "description": "Optional revisionId from GET /api/v1/slides/{presentationId}. If the presentation changed since, nothing is written and the response is 409."
                   }
                 }
               }
@@ -30721,6 +34717,11 @@
                         "type": "object"
                       },
                       "description": "The reply of each request in the same order"
+                    },
+                    "revisionId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "The presentation revision after this update, for the next pinned call."
                     }
                   }
                 }
@@ -30747,8 +34748,636 @@
               }
             }
           },
+          "409": {
+            "description": "The presentation changed after requiredRevisionId was read; nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections": {
+      "get": {
+        "operationId": "listStorageCollections",
+        "summary": "List your storage collections with record counts and quotas",
+        "description": "Name, description, schema version, field names, record count, size and last write of every collection, plus the quotas. Mirrors the MCP tool `listCollections`.",
+        "tags": [
+          "storage"
+        ],
+        "responses": {
+          "200": {
+            "description": "The collections and limits.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}": {
+      "get": {
+        "operationId": "describeStorageCollection",
+        "summary": "Get the schema and migration history of one collection",
+        "description": "Every field with its type and description, the keyField and ttlDays, record count, and the last 10 migrations. Mirrors the MCP tool `describeCollection`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/records/{recordId}": {
+      "get": {
+        "operationId": "getStorageRecord",
+        "summary": "Get one record by id or by keyField value",
+        "description": "The record with its system fields (_id, _createdAt, _updatedAt, _ageDays, and _stale when the collection has ttlDays). Mirrors the MCP tool `getRecord`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          },
+          {
+            "name": "recordId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record _id, or its keyField value with by=key (URL-encode it)."
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "key"
+              ]
+            },
+            "description": "key: recordId is the keyField value rather than the _id. Default id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/find": {
+      "post": {
+        "operationId": "findStorageRecords",
+        "summary": "Query the records of one collection",
+        "description": "A read despite the POST: the where conditions do not fit a query string. Returns total, one page of records and nextCursor; pass nextCursor back with the other arguments unchanged. Mirrors the MCP tool `findRecords`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "where": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "op": {
+                          "type": "string",
+                          "enum": [
+                            "eq",
+                            "ne",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "in",
+                            "contains",
+                            "exists"
+                          ]
+                        },
+                        "value": {
+                          "description": "Compared as the field's type. in: an array. contains: a substring (string/url fields, case-insensitive) or one element (array fields). exists: true/false."
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "op"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 20,
+                    "description": "Conditions, all of which must hold."
+                  },
+                  "contains": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "Case-insensitive text search across the whole record, field names included."
+                  },
+                  "updatedWithinDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3650,
+                    "description": "Only records updated within this many days."
+                  },
+                  "orderBy": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "A single-value field, _updatedAt (default) or _createdAt."
+                  },
+                  "order": {
+                    "type": "string",
+                    "enum": [
+                      "asc",
+                      "desc"
+                    ],
+                    "default": "desc"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 25
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "maxLength": 100000,
+                    "description": "nextCursor from a previous call, to get the next page. Keep the other arguments unchanged."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A page of matches.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/records": {
+      "post": {
+        "operationId": "insertStorageRecords",
+        "summary": "Insert up to 500 records, all or nothing",
+        "description": "Each record must match the collection schema; one invalid record rejects the batch with the problem in each listed. With onConflict update, a record whose keyField value exists replaces that record. Answers 201 when anything was created, 200 for an upsert that only replaced. Body limit 5 MB. The permanent dashboard API key can call it, not only the 5-minute bearer. Mirrors the MCP tool `insertRecords`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "description": "Records to insert, each matching the collection schema. All or nothing: one invalid record rejects the batch."
+                  },
+                  "onConflict": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "update"
+                    ],
+                    "default": "error",
+                    "description": "When a record's keyField value already exists: \"error\" (default) rejects the batch, \"update\" replaces that record's data."
+                  }
+                },
+                "required": [
+                  "records"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Records replaced.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Records created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/storage/collections/{collection}/records/{recordId}/update": {
+      "post": {
+        "operationId": "updateStorageRecord",
+        "summary": "Update one record: set merges fields, unset removes optional ones",
+        "description": "The merged record must match the schema. The record is the one the path names; an id or key in the body is ignored. The permanent dashboard API key can call it, not only the 5-minute bearer. Mirrors the MCP tool `updateRecord`.",
+        "tags": [
+          "storage"
+        ],
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The collection name. GET /api/v1/storage/collections lists them."
+          },
+          {
+            "name": "recordId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record _id, or its keyField value with by=key (URL-encode it)."
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "key"
+              ]
+            },
+            "description": "key: recordId is the keyField value rather than the _id. Default id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "set": {
+                    "type": "object",
+                    "additionalProperties": {},
+                    "description": "Fields to set, merged over the current record. The result must match the schema."
+                  },
+                  "unset": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    "maxItems": 50,
+                    "description": "Optional fields to remove."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments, or the request does not match the collection schema; the error says what to fix.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such collection or record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no database.",
             "content": {
               "application/json": {
                 "schema": {
@@ -30842,40 +35471,6 @@
         }
       }
     },
-    "/api/v1/docs/{documentId}/tabs": {
-      "get": {
-        "operationId": "listDocumentTabs",
-        "summary": "List tabs in a Google Doc",
-        "description": "List tabs in a Google Doc. Mirrors the MCP tool `listDocumentTabs`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "docs"
-        ],
-        "parameters": [
-          {
-            "name": "documentId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
     "/api/v1/docs/{documentId}/structure": {
       "get": {
         "operationId": "inspectDocStructure",
@@ -30914,7 +35509,7 @@
       "get": {
         "operationId": "readSpreadsheet",
         "summary": "Read a range from a spreadsheet",
-        "description": "Read a range from a spreadsheet. Mirrors the MCP tool `readSpreadsheet`. Returns upstream JSON by default; pass Accept: text/plain for markdown. GET sibling of the existing POST /api/v1/sheets/{id}/read.",
+        "description": "Read a range from a spreadsheet. Mirrors the MCP tool `readSpreadsheet`. Returns upstream JSON by default; pass Accept: text/plain for markdown. GET sibling of the existing POST /api/v1/sheets/{id}/read. Optional valueRenderOption: FORMATTED_VALUE (default), UNFORMATTED_VALUE or FORMULA.",
         "tags": [
           "sheets"
         ],
@@ -31016,6 +35611,33 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/drive/upload-sessions": {
+      "post": {
+        "operationId": "createDriveUploadSession",
+        "summary": "Open a resumable upload for a large file; returns the URL to PUT it to",
+        "description": "Open a resumable upload for a large file; returns the URL to PUT it to. Mirrors the MCP tool `createDriveUploadSession`. Takes a JSON body and returns JSON. Answers 201 with uploadUrl. PUT the bytes there (no bearer needed; no size limit of ours), and the PUT response is the new file. The URL alone authorizes that one upload for about a week, so keep it private. convertTo is checked against what Drive can import. Not destructive: nothing exists until the bytes arrive, and the permanent dashboard key can already upload through POST /api/v1/drive/files, so it is accepted here too.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
           }
         }
       }
@@ -31464,6 +36086,31 @@
             "description": "Resource not found"
           }
         }
+      },
+      "post": {
+        "operationId": "createSlackChannel",
+        "summary": "Create a public or private channel",
+        "description": "Create a public or private channel. Mirrors the MCP tool `createChannel`. Takes a JSON body and returns JSON. Answers 201. Needs channels:manage (bot) or channels:write/groups:write (user). Not idempotent: a taken name is refused by Slack (name_taken). 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
       }
     },
     "/api/v1/slack/channels/{channelId}/messages": {
@@ -31685,6 +36332,501 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/users/{userId}": {
+      "get": {
+        "operationId": "getSlackUserProfile",
+        "summary": "Get a full user profile",
+        "description": "Get a full user profile. Mirrors the MCP tool `getUserProfile`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Email needs users:read.email; custom fields need users.profile:read, and customFieldsError says why they are missing.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/members": {
+      "get": {
+        "operationId": "listSlackChannelMembers",
+        "summary": "List the members of a channel",
+        "description": "List the members of a channel. Mirrors the MCP tool `listChannelMembers`. Returns upstream JSON by default; pass Accept: text/plain for markdown. User IDs only, paginated with nextCursor.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/canvases/{canvasId}": {
+      "get": {
+        "operationId": "getSlackCanvas",
+        "summary": "Read a canvas as markdown or HTML",
+        "description": "Read a canvas as markdown or HTML. Mirrors the MCP tool `getCanvasContent`. Returns upstream JSON by default; pass Accept: text/plain for markdown. ?contentType=html for HTML. Needs canvases:read.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "canvasId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/items": {
+      "get": {
+        "operationId": "listSlackListItems",
+        "summary": "Read the records of a Slack List",
+        "description": "Read the records of a Slack List. Mirrors the MCP tool `getListItems`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Paid workspaces only. includeList (default true) adds the title and column schema. Paginated with nextCursor.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSlackListItem",
+        "summary": "Add a record to a Slack List",
+        "description": "Add a record to a Slack List. Mirrors the MCP tool `createListItem`. Takes a JSON body and returns JSON. Answers 201. Each field names its columnId and exactly one typed value. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/items/{itemId}": {
+      "get": {
+        "operationId": "getSlackListItem",
+        "summary": "Read one Slack List record",
+        "description": "Read one Slack List record. Mirrors the MCP tool `getListItem`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Paid workspaces only.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/messages/{ts}/reactions": {
+      "post": {
+        "operationId": "addSlackReaction",
+        "summary": "Add an emoji reaction to a message",
+        "description": "Add an emoji reaction to a message. Mirrors the MCP tool `addReaction`. Takes a JSON body and returns JSON. A reaction already there answers 200 with alreadyPresent true. Needs reactions:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ts",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/channels/{channelId}/scheduled-messages": {
+      "post": {
+        "operationId": "scheduleSlackMessage",
+        "summary": "Schedule a message for later delivery",
+        "description": "Schedule a message for later delivery. Mirrors the MCP tool `scheduleMessage`. Takes a JSON body and returns JSON. Answers 201 with scheduledMessageId. threadTs schedules a thread reply. postAt must be in the future and within 120 days. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "channelId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/files": {
+      "post": {
+        "operationId": "uploadSlackFile",
+        "summary": "Upload a file and optionally share it into a channel",
+        "description": "Upload a file and optionally share it into a channel. Mirrors the MCP tool `uploadFile`. Takes a JSON body and returns JSON. Answers 201. Body limit 5mb (about 3.7 MB of file as base64). sharedConfirmed is null when Slack has not finished sharing yet. Needs files:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/canvases": {
+      "post": {
+        "operationId": "createSlackCanvas",
+        "summary": "Create a standalone or channel canvas",
+        "description": "Create a standalone or channel canvas. Mirrors the MCP tool `createCanvas`. Takes a JSON body and returns JSON. Answers 201 with canvasId. Needs canvases:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/canvases/{canvasId}/edit": {
+      "post": {
+        "operationId": "editSlackCanvas",
+        "summary": "Insert into, replace a section of, or rename a canvas",
+        "description": "Insert into, replace a section of, or rename a canvas. Mirrors the MCP tool `editCanvas`. Takes a JSON body and returns JSON. No delete and no whole-canvas replace: replace_section needs sectionId. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "canvasId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists": {
+      "post": {
+        "operationId": "createSlackList",
+        "summary": "Create a Slack List",
+        "description": "Create a Slack List. Mirrors the MCP tool `createList`. Takes a JSON body and returns JSON. Answers 201. Paid workspaces only; needs lists:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/update": {
+      "post": {
+        "operationId": "updateSlackList",
+        "summary": "Rename a Slack List, replace its description or switch todo mode",
+        "description": "Rename a Slack List, replace its description or switch todo mode. Mirrors the MCP tool `updateList`. Takes a JSON body and returns JSON. Pass at least one of name, description, todoMode (400 otherwise). confirmed is true only when the name alone changed and reads back; description and todo mode are not read back (null). Paid workspaces only. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/items/{itemId}/update": {
+      "post": {
+        "operationId": "updateSlackListItem",
+        "summary": "Update fields of a Slack List record",
+        "description": "Update fields of a Slack List record. Mirrors the MCP tool `updateListItem`. Takes a JSON body and returns JSON. Re-reads the record: confirmed is false, with notReadBack, when a column did not stick. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "itemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
           }
         }
       }

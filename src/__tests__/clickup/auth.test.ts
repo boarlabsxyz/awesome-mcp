@@ -49,6 +49,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     createSupabaseSession: mock.fn(() => ({} as any)),
     createAdminSession: mock.fn(() => ({} as any)),
     createStorageSession: mock.fn(() => ({} as any)),
+    createSandboxSession: mock.fn(() => ({} as any)),
     ...overrides,
   };
 }

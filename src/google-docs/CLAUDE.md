@@ -16,6 +16,20 @@
 - **No REST sibling** for `rejectSuggestion`/`deleteSuggestion` (irrecoverable); suggestion-thread posts can't be edited/deleted over REST (one path = one thread kind).
 - **Check first on a live run:** a 400 on the mask, a nested-tab comment with no range, an absent `plainTextQuote`.
 
+### Tabs, footnotes, tables, revision pinning (NOT exercised live)
+- **Every write naming a tab checks it first** (`assertTabsExist`) — Google applies a write to an unknown tab to the first tab. No `fields` mask on that read: a mask cannot recurse `childTabs`, and the old one refused every nested tab as "not found".
+- **Text/paragraph lookups read the named tab** (`getBodyContent`) — `document.body` is the first tab only, so a tab-blind lookup returns another tab's indices.
+- **`requiredRevisionId` is sent only when given** — unpinned writes keep their old request body. A stale id is a 400 rewritten to say nothing was written. Reads (`readGoogleDoc` footer, `inspectDocStructure`) expose `revisionId`; writes return the new one.
+- **`createFootnote` is two writes** (reference, then `insertText` at `endOfSegmentLocation` of the new segment); a failed second write names the empty footnote left behind.
+- **Tables are named by start index** and read before writing, so a wrong index or an out-of-range cell is refused by name (Google says only "Invalid requests[0]"). `deleteTableRowOrColumn` refuses the last row/column: Google would delete the whole table.
+- **Table writes re-read the table** — inserts and deletes report `confirmed` from the re-read shape (a delete of a merged cell can take more than one); merge/unmerge are `confirmed: null` (no size change to prove).
+- **`readGoogleDoc` appends the revision to the text format only** — markdown stays pure, json carries `revisionId`, the empty-doc answer is unchanged.
+- **A failed footnote text write keeps the upstream status** on its UserError, so REST does not blame the caller for a 403/5xx.
+- **`formatTableCells` writes borders whole** — unnamed parts default to black/1pt/SOLID rather than Google's reset.
+- **`updateDocumentTab` / `deleteDocumentTab` re-read** and report `confirmed`. `parentTabId` is not updatable (not offered).
+- **MCP-only (no REST sign-off):** `deleteDocumentTab`, `deleteTableRowOrColumn`. `batchUpdateDoc` has no tab/table-delete operation, so REST cannot reach them either.
+- **Check first on a live run:** the stale-revision message matching `/revision/i`, a new footnote's leading space, `updateDocumentTabProperties` with `index`.
+
 ### Text safety (`textSafety.ts`)
 - On every `readGoogleDoc` path, `parseDocStructure` `textPreview`, and `GET /api/v1/docs/:documentId`.
 - **`format: 'json'` truncation** — the partial is a string field inside a valid envelope, never sliced JSON.
@@ -23,7 +37,7 @@
 - **`U+000B` → `\n`** (soft break, not dropped); private-use placeholder chars are removed. `assertTransportSafe` is the backstop, naming offset and code point.
 - **`format: 'text'`'s `fields` projection must name tables**, or table text is dropped.
 
-### REST writes (19 POSTs)
+### REST writes
 - **`server.ts` is the app entry point** (imports `createWebApp`), so `webServer.ts` must never import it, even dynamically; shared schemas/ops live in `writeSchemas.ts`/`writeOps.ts`. Ops return data; tool renders text, route emits JSON.
 - **Entry point boots unless `NODE_TEST_CONTEXT` is set** — "start unless testing", since a wrong argv check would stop production booting.
 - **Omitted:** `editTableCell`, `fixListFormatting`, `findElement` (`NOT_IMPLEMENTED`, they throw).
