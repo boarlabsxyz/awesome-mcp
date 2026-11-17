@@ -920,28 +920,45 @@ export async function performUpdateEngagement(
   args: { engagementType: HubSpotEngagementType; engagementId: string; properties: Record<string, unknown> },
 ): Promise<{ engagement: HubSpotObject; confirmed: Record<string, boolean | null> }> {
   await client.updateEngagement(args.engagementType, args.engagementId, args.properties);
-  const keys = Object.keys(args.properties);
-  // The PATCH already succeeded: a failed re-read (e.g. no sales-email-read for
-  // an email) leaves every property unconfirmed, not the update failed.
-  let engagement: HubSpotObject;
+  const { record, confirmed } = await rereadConfirmed(args.engagementId, args.properties,
+    keys => client.getEngagement(args.engagementType, args.engagementId, keys));
+  return { engagement: record, confirmed };
+}
+
+/**
+ * Re-read the properties a PATCH sent and confirm each one. The PATCH already
+ * succeeded, so a failed re-read (a missing read scope, a 503) leaves every
+ * property unconfirmed (null) rather than failing the update.
+ */
+async function rereadConfirmed(
+  id: string,
+  sent: Record<string, unknown>,
+  read: (keys: string[]) => Promise<HubSpotObject>,
+): Promise<{ record: HubSpotObject; confirmed: Record<string, boolean | null> }> {
+  const keys = Object.keys(sent);
+  let record: HubSpotObject;
   try {
-    engagement = await client.getEngagement(args.engagementType, args.engagementId, keys);
+    record = await read(keys);
   } catch {
-    return { engagement: { id: args.engagementId }, confirmed: Object.fromEntries(keys.map(k => [k, null])) };
+    return { record: { id }, confirmed: Object.fromEntries(keys.map(k => [k, null])) };
   }
-  const stored = (engagement.properties ?? {}) as Record<string, unknown>;
-  const confirmed = Object.fromEntries(keys.map(k => [k, k in stored && stored[k] !== null ? sameValue(args.properties[k], stored[k]) : null]));
-  return { engagement, confirmed };
+  const stored = (record.properties ?? {}) as Record<string, unknown>;
+  const confirmed = Object.fromEntries(keys.map(k => [k, k in stored && stored[k] !== null ? sameValue(sent[k], stored[k]) : null]));
+  return { record, confirmed };
+}
+
+/** The warnings for a confirmed map: properties that read back differently, and those that could not be confirmed. */
+function confirmationNote(confirmed: Record<string, boolean | null>): string {
+  const differ = Object.entries(confirmed).filter(([, v]) => v === false).map(([k]) => k);
+  const unknown = Object.entries(confirmed).filter(([, v]) => v === null).map(([k]) => k);
+  return (differ.length ? `\n\n⚠ These read back differently from what was sent: ${differ.join(', ')}.` : '')
+    + (unknown.length ? `\n\nCould not confirm on re-read (not returned, or normalised by HubSpot): ${unknown.join(', ')}.` : '');
 }
 
 export async function opUpdateEngagement(client: HubSpotClient, args: Parameters<typeof performUpdateEngagement>[1]): Promise<string> {
   const { engagement, confirmed } = await performUpdateEngagement(client, args);
   const label = args.engagementType.slice(0, -1);
-  const differ = Object.entries(confirmed).filter(([, v]) => v === false).map(([k]) => k);
-  const unknown = Object.entries(confirmed).filter(([, v]) => v === null).map(([k]) => k);
-  const note = (differ.length ? `\n\n⚠ These read back differently from what was sent: ${differ.join(', ')}.` : '')
-    + (unknown.length ? `\n\nCould not confirm on re-read (not returned, or normalised by HubSpot): ${unknown.join(', ')}.` : '');
-  return `Updated ${label} ${args.engagementId}.\n\n${formatEngagement(engagement, label)}${note}`;
+  return `Updated ${label} ${args.engagementId}.\n\n${formatEngagement(engagement, label)}${confirmationNote(confirmed)}`;
 }
 
 // --- Tickets ---
@@ -960,10 +977,15 @@ export async function performCreateTicket(
   });
 }
 
-/** PATCH then re-read: the echo omits populated fields (same contract as updateDeal). */
-export async function performUpdateTicket(client: HubSpotClient, args: { ticketId: string; properties: Record<string, unknown> }): Promise<HubSpotObject> {
+/** PATCH then re-read, the echo omitting populated fields; confirmed per property as in performUpdateEngagement. */
+export async function performUpdateTicket(
+  client: HubSpotClient,
+  args: { ticketId: string; properties: Record<string, unknown> },
+): Promise<{ ticket: HubSpotObject; confirmed: Record<string, boolean | null> }> {
   await client.updateTicket(args.ticketId, args.properties);
-  return client.getTicket(args.ticketId, [...new Set([...TICKET_PROPERTIES, ...Object.keys(args.properties)])]);
+  const { record, confirmed } = await rereadConfirmed(args.ticketId, args.properties,
+    keys => client.getTicket(args.ticketId, [...new Set([...TICKET_PROPERTIES, ...keys])]));
+  return { ticket: record, confirmed };
 }
 
 /**
@@ -1603,7 +1625,8 @@ hubspotServer.addTool({
   execute: (args, { log, session }) =>
     withHubSpotClient('Failed to update ticket', session, log, async (client) => {
       log.info(`updateTicket id=${args.ticketId}`);
-      return `Updated ticket.\n\n${formatEngagement(await performUpdateTicket(client, args), 'Ticket')}`;
+      const { ticket, confirmed } = await performUpdateTicket(client, args);
+      return `Updated ticket ${args.ticketId}.\n\n${formatEngagement(ticket, 'Ticket')}${confirmationNote(confirmed)}`;
     }),
 });
 

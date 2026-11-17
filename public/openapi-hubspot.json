@@ -54,7 +54,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response (total, results, paging), or the rendered list when text was requested."
+            "description": "A HubSpot CRM search response (total, results, paging), or the rendered list when text was requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -223,7 +236,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot company object, or its rendering when text was requested."
+            "description": "The raw HubSpot company object, or its rendering when text was requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -580,7 +606,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -749,7 +788,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot contact object, or its rendering."
+            "description": "The raw HubSpot contact object, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -913,7 +965,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -1072,7 +1137,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot deal object, or its rendering."
+            "description": "The raw HubSpot deal object, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -1238,7 +1316,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw pipelines page, or its rendering."
+            "description": "The raw pipelines page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelinesPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -1796,7 +1887,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw users page, or its rendering."
+            "description": "The raw users page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -1877,7 +1981,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw teams page, or its rendering."
+            "description": "The raw teams page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamsPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -2101,7 +2218,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -2329,7 +2459,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw search page, or its rendering."
+            "description": "The raw search page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -2416,11 +2559,11 @@
         },
         "responses": {
           "200": {
-            "description": "The ticket, re-read after the update.",
+            "description": "The ticket re-read after the update, and what each sent property read back as.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CrmObject"
+                  "$ref": "#/components/schemas/UpdateTicketResult"
                 }
               }
             }
@@ -2624,7 +2767,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot property definition, or its rendering."
+            "description": "The raw HubSpot property definition, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyDefinition"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -4370,6 +4526,192 @@
             "items": {
               "$ref": "#/components/schemas/PipelineStage"
             }
+          }
+        }
+      },
+      "CrmSearchPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot CRM search response.",
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CrmObject"
+            }
+          },
+          "paging": {
+            "type": "object",
+            "description": "Present when there is a next page; pass paging.next.after as ?after.",
+            "properties": {
+              "next": {
+                "type": "object",
+                "properties": {
+                  "after": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "PipelinesPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pipeline"
+            }
+          }
+        }
+      },
+      "HubSpotUser": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "roleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "primaryTeamId": {
+            "type": "string"
+          },
+          "secondaryTeamIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "superAdmin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UsersPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubSpotUser"
+            }
+          },
+          "paging": {
+            "type": "object",
+            "description": "Present when there is a next page; pass paging.next.after as ?after.",
+            "properties": {
+              "next": {
+                "type": "object",
+                "properties": {
+                  "after": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "HubSpotTeam": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "secondaryUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TeamsPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubSpotTeam"
+            }
+          }
+        }
+      },
+      "PropertyDefinition": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot property definition.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "fieldType": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "UpdateTicketResult": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "confirmed"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/CrmObject"
+          },
+          "confirmed": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean",
+              "nullable": true
+            },
+            "description": "Each sent property: true = reads back as sent, false = reads back differently, null = could not confirm (not returned, or the re-read failed after the update succeeded; ticket then carries only id)."
           }
         }
       }

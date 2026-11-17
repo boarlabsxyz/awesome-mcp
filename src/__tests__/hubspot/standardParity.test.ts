@@ -6,6 +6,7 @@ import {
   performUpdateEngagement,
   opUpdateEngagement,
   performCreateTicket,
+  performUpdateTicket,
   fetchTicketsSearch,
   searchTicketsSchema,
   performCreatePipeline,
@@ -67,6 +68,24 @@ test('createTicket sends the pipeline and the required stage', async () => {
   const calls = router(() => ({ body: { id: 't1' } }));
   await performCreateTicket(client(), { subject: 'Broken', pipeline: '0', pipelineStage: '1', priority: 'HIGH' });
   assert.deepEqual(calls[0].body.properties, { subject: 'Broken', hs_pipeline: '0', hs_pipeline_stage: '1', hs_ticket_priority: 'HIGH' });
+});
+
+test('a ticket update whose re-read fails is reported unconfirmed, not failed', async () => {
+  const calls = router((method) => (method === 'PATCH' ? { body: { id: 't1' } } : { status: 503, body: { message: 'unavailable' } }));
+  const r = await performUpdateTicket(client(), { ticketId: 't1', properties: { hs_pipeline_stage: '4' } });
+  assert.deepEqual(r, { ticket: { id: 't1' }, confirmed: { hs_pipeline_stage: null } });
+  assert.equal(calls[0].method, 'PATCH');
+});
+
+test('a ticket update confirms each property it sent', async () => {
+  router((method) => (method === 'PATCH' ? { body: { id: 't1' } } : { body: { id: 't1', properties: { hs_pipeline_stage: '4', subject: 'Other' } } }));
+  const r = await performUpdateTicket(client(), { ticketId: 't1', properties: { hs_pipeline_stage: '4', subject: 'Mine' } });
+  assert.deepEqual(r.confirmed, { hs_pipeline_stage: true, subject: false });
+});
+
+test('a failed ticket PATCH is still an error', async () => {
+  router(() => ({ status: 404, body: { message: 'not found' } }));
+  await assert.rejects(() => performUpdateTicket(client(), { ticketId: 'nope', properties: { subject: 'x' } }));
 });
 
 test('open tickets are found by the stages marked OPEN in the ticket pipelines', async () => {
