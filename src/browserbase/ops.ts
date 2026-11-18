@@ -44,6 +44,7 @@ import {
   observeSchema,
   startSchema,
 } from './schemas.js';
+import type { BrowserbaseSettings } from './settings.js';
 
 /** Injected so tests need not stub global fetch. */
 export type HostedProxy = (
@@ -51,9 +52,13 @@ export type HostedProxy = (
   args: Record<string, unknown>,
 ) => Promise<string>;
 
-/** Bind a proxy to one connection's API key. */
-export function hostedProxyFor(apiKey: string): HostedProxy {
-  return (name, args) => proxyHostedTool(apiKey, name, args);
+/**
+ * Bind a proxy to one connection's API key and, optionally, its settings
+ * (model, keep-alive, proxies, verified), read when each call is made so a
+ * change on the dashboard applies to the next call.
+ */
+export function hostedProxyFor(apiKey: string, settings?: () => Promise<BrowserbaseSettings | undefined>): HostedProxy {
+  return async (name, args) => proxyHostedTool(apiKey, name, args, {}, settings ? await settings() : undefined);
 }
 
 /**
@@ -231,7 +236,21 @@ export async function opEnd(
     // and the payload is a CDP fragment that tells the caller nothing. Echoing
     // a redacted version would just be noise with a redaction note attached.
     void text;
-    return `Browser session closed${suffix}. It is no longer billing.`;
+    if (!sessionId) {
+      return 'Browser session closed. With keep-alive on, a session can outlive this call — run listBrowserSessions to check nothing is still RUNNING.';
+    }
+    // A keep-alive session (connection Settings) may survive the hosted `end`.
+    // An explicit release is idempotent, so it is always sent, and "no longer
+    // billing" is claimed only when Browserbase accepted it.
+    try {
+      await client.releaseSession(sessionId);
+      return `Browser session closed${suffix}. It is no longer billing.`;
+    } catch (releaseErr: any) {
+      return (
+        `Browser session closed${suffix}, but the follow-up release was not accepted (${releaseErr?.message ?? releaseErr}). ` +
+        `If keep-alive is on it may still be running: check getBrowserSession and forceEndBrowserSession if needed.`
+      );
+    }
   } catch (proxyErr: any) {
     if (!sessionId) {
       throw new UserError(

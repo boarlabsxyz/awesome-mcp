@@ -54,7 +54,7 @@ const REDACTIONS: ReadonlyArray<{ label: string; pattern: RegExp; replacement: s
   // Any remaining secret-shaped query parameter, whatever its value format.
   {
     label: 'credential parameter',
-    pattern: /([?&](?:signingkey|signing_key|apikey|api_key|accesstoken|access_token|token|secret|password|key)=)[^&\s"'<>]+/gi,
+    pattern: /([?&](?:signingkey|signing_key|apikey|api_key|modelapikey|model_api_key|browserbaseapikey|accesstoken|access_token|token|secret|password|key)=)[^&\s"'<>]+/gi,
     replacement: '$1[redacted]',
   },
   // Internal service topology — not a credential, but nothing a caller should see.

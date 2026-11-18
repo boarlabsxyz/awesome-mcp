@@ -30,6 +30,7 @@ import { FastMCP, UserError } from 'fastmcp';
 import { instrumentServer } from '../usage/instrumentServer.js';
 
 import { UserSession } from '../userSession.js';
+import type { BrowserbaseSettings } from './settings.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
@@ -103,7 +104,23 @@ function getApiKey(session?: UserSession): string {
 }
 
 function proxyFor(session?: UserSession): HostedProxy {
-  return hostedProxyFor(getApiKey(session));
+  return hostedProxyFor(getApiKey(session), () => getBrowserbaseSettings(session));
+}
+
+/**
+ * The connection's settings, re-read per call like the domain rules. Fails
+ * OPEN to Browserbase's defaults: these are choices (model, proxies), not
+ * restrictions, so a database blip should not stop the browser.
+ */
+async function getBrowserbaseSettings(session?: UserSession): Promise<BrowserbaseSettings | undefined> {
+  const instanceId = session?.browserbaseInstanceId;
+  if (!instanceId) return undefined;
+  try {
+    const { getMcpConnectionByInstanceId } = await import('../mcpConnectionStore.js');
+    return ((await getMcpConnectionByInstanceId(instanceId))?.providerTokens as any)?.browserbaseSettings as BrowserbaseSettings | undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

@@ -372,6 +372,7 @@ import type { OutlineClient } from '../outline/apiHelpers.js';
 import type { HubSpotClient } from '../hubspot/apiHelpers.js';
 import type { RedmineClient } from '../redmine/apiHelpers.js';
 import type { BrowserbaseClient } from '../browserbase/apiHelpers.js';
+import type { BrowserbaseSettings } from '../browserbase/settings.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
@@ -649,7 +650,7 @@ export function computeTokenStatus(
  * one of these keys has the same trap — omit the key on the reconnect path and
  * let the stored value win.
  */
-const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl', 'supabaseSettings'] as const;
+const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl', 'supabaseSettings', 'browserbaseSettings'] as const;
 
 /**
  * Non-Google sibling of mergeReconnectTokens: carry forward anything the fresh
@@ -1048,12 +1049,13 @@ interface PasteConnectionOpts {
  * WIDEN access on reconnect — the one direction a reconnect must never move,
  * which is exactly why the OAuth path lists accessRules in
  * PRESERVED_ON_RECONNECT. That merge does not run here, so this path carries
- * the key itself. Same for Supabase's read-only / project limit. Filled in
+ * the key itself. Same for Supabase's read-only / project limit, and for the
+ * Browserbase settings, which hold a model key the user typed once. Filled in
  * only when the fresh record leaves the key empty, so a builder that
  * deliberately sets rules still wins; the store carries it inside the UPDATE,
  * so a rule saved while the re-auth ran is kept too.
  */
-const PRESERVED_ON_PASTE = ['accessRules', 'supabaseSettings'] as const;
+const PRESERVED_ON_PASTE = ['accessRules', 'supabaseSettings', 'browserbaseSettings'] as const;
 
 async function persistPasteConnectionFor(
   ctx: { instanceId?: string; userId: number; mcpSlug: string; userApiKey: string; res: express.Response },
@@ -3244,6 +3246,66 @@ function registerSharedRoutes(app: express.Express): void {
     return { user, connection };
   }
 
+  // Browserbase settings: model (+ the user's own model API key), keep-alive,
+  // proxies, verified. The key is WRITE-ONLY: GET reports only whether one is
+  // set, and nothing here ever returns or logs it.
+  app.get('/api/instances/:instanceId/browserbase-settings', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
+      if (!owned) return;
+      const { publicBrowserbaseSettings } = await import('../browserbase/settings.js');
+      res.json({ settings: publicBrowserbaseSettings((owned.connection.providerTokens as any)?.browserbaseSettings) });
+    } catch (err) {
+      console.error('[browserbase-settings] error:', (err as Error)?.message);
+      res.status(500).json({ error: 'Failed to load Browserbase settings' });
+    }
+  });
+
+  app.post('/api/instances/:instanceId/browserbase-settings', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
+      if (!owned) return;
+      const instanceId = req.params.instanceId as string;
+      const { mergeBrowserbaseSettings, publicBrowserbaseSettings } = await import('../browserbase/settings.js');
+      const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // The merge reads the stored settings (it keeps the model key unless the
+      // request replaces or clears it), so the write is a compare-and-set on
+      // what it read: a save that landed in between is merged into, never
+      // overwritten — a retry cannot bring back a key another save cleared.
+      // Only the one key is patched, so the Browserbase key beside it is never
+      // put back either. Nothing set = delete (undefined), never store {}.
+      let merged: { settings: BrowserbaseSettings } | undefined;
+      for (let attempt = 0; attempt < 3 && !merged; attempt++) {
+        const latest = await getMcpConnectionByInstanceId(instanceId);
+        if (!latest) { res.status(404).json({ error: 'Browserbase connection not found' }); return; }
+        const stored = (latest.providerTokens as any)?.browserbaseSettings;
+        const next = mergeBrowserbaseSettings(stored, (req.body as any)?.settings);
+        if ('error' in next) { res.status(400).json({ error: next.error }); return; }
+        const written = await patchMcpInstanceProviderTokens(
+          instanceId,
+          { browserbaseSettings: Object.keys(next.settings).length ? next.settings : undefined },
+          { expect: { browserbaseSettings: stored } },
+        );
+        if (written) merged = next;
+      }
+      if (!merged) {
+        const gone = !(await getMcpConnectionByInstanceId(instanceId));
+        res.status(gone ? 404 : 409).json({
+          error: gone ? 'Browserbase connection not found' : 'The settings kept changing while saving; reload them and try again',
+        });
+        return;
+      }
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(owned.user.apiKey, instanceId);
+      const visible = publicBrowserbaseSettings(merged.settings);
+      console.error(`User ${owned.user.id} updated Browserbase settings for ${instanceId}: model=${visible.modelName || 'default'} keySet=${visible.modelApiKeySet} keepAlive=${visible.keepAlive} proxies=${visible.proxies} verified=${visible.verified}`);
+      res.json({ success: true, settings: visible });
+    } catch (err) {
+      console.error('[browserbase-settings] error:', (err as Error)?.message);
+      res.status(500).json({ error: 'Failed to save Browserbase settings' });
+    }
+  });
+
   // Supabase connection settings: project limit, read-only, feature groups.
   // Sent to Supabase as query parameters on its hosted URL, and enforced
   // locally too (src/supabase/settings.ts).
@@ -3281,9 +3343,11 @@ function registerSharedRoutes(app: express.Express): void {
       // read-spread-replace would put back an older token than a concurrent
       // refresh just stored. Nothing set = the default; delete (undefined)
       // rather than store {}, a non-empty value that survives every reconnect.
-      await patchMcpInstanceProviderTokens(instanceId, {
+      const written = await patchMcpInstanceProviderTokens(instanceId, {
         supabaseSettings: Object.keys(normalized.settings).length ? normalized.settings : undefined,
       });
+      // Deleted (another tab) since the ownership check: nothing was saved.
+      if (!written) { res.status(404).json({ error: 'Supabase connection not found' }); return; }
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(owned.user.apiKey, instanceId);
       console.error(`User ${owned.user.id} updated Supabase settings for ${instanceId}: ${JSON.stringify(normalized.settings)}`);
@@ -3341,14 +3405,11 @@ function registerSharedRoutes(app: express.Express): void {
       const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
       if (!owned) return;
 
-      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
-      // Spread, because updateMcpInstanceProviderTokens replaces the whole
-      // provider_tokens column — a bare { accessRules } would drop the API key.
-      const updatedTokens = {
-        ...(owned.connection.providerTokens as any),
-        accessRules: { allowedDomains, blockedDomains },
-      };
-      await updateMcpInstanceProviderTokens(instanceId, updatedTokens);
+      const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Patch the one key: a spread of the record read for the ownership check
+      // would put back a Browserbase key or settings changed since.
+      const written = await patchMcpInstanceProviderTokens(instanceId, { accessRules: { allowedDomains, blockedDomains } });
+      if (!written) { res.status(404).json({ error: 'Browserbase connection not found' }); return; }
 
       // Mandatory, not hygiene: getRules re-reads per call but the SESSION is
       // memoised by `${apiKey}:${instanceId}` with no TTL, so a stale session
@@ -9726,8 +9787,13 @@ function registerRestApiRoutes(app: express.Express): void {
           args = parsed.data;
         }
 
+        const instanceId = req.userSession?.browserbaseInstanceId;
+        const settings = async () => {
+          if (!instanceId) return undefined;
+          try { return ((await getMcpConnectionByInstanceId(instanceId))?.providerTokens as any)?.browserbaseSettings; } catch { return undefined; }
+        };
         const result = await route.run(
-          { ops, client, proxy: hostedProxyFor(key), req },
+          { ops, client, proxy: hostedProxyFor(key, settings), req },
           args,
           req.params as RouteParams,
         );
