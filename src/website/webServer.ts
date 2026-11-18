@@ -649,7 +649,7 @@ export function computeTokenStatus(
  * one of these keys has the same trap — omit the key on the reconnect path and
  * let the stored value win.
  */
-const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl'] as const;
+const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl', 'supabaseSettings'] as const;
 
 /**
  * Non-Google sibling of mergeReconnectTokens: carry forward anything the fresh
@@ -1036,8 +1036,8 @@ interface PasteConnectionOpts {
  * rather than buried three levels into a route.
  */
 /**
- * What a paste-token re-auth should store: the freshly built record, plus the
- * one key it cannot reproduce.
+ * What a paste-token re-auth keeps from the stored record: the freshly built
+ * record replaces the rest.
  *
  * This path is a near-straight replace, unlike the OAuth reconnect — the paste
  * flow produces every field it stores (access_token, plus baseUrl for the
@@ -1048,20 +1048,12 @@ interface PasteConnectionOpts {
  * WIDEN access on reconnect — the one direction a reconnect must never move,
  * which is exactly why the OAuth path lists accessRules in
  * PRESERVED_ON_RECONNECT. That merge does not run here, so this path carries
- * the key itself. Filled in only when the fresh record omits it, so a builder
- * that deliberately sets rules still wins.
+ * the key itself. Same for Supabase's read-only / project limit. Filled in
+ * only when the fresh record leaves the key empty, so a builder that
+ * deliberately sets rules still wins; the store carries it inside the UPDATE,
+ * so a rule saved while the re-auth ran is kept too.
  */
-function pasteReplacementTokens(
-  existingTokens: unknown,
-  freshTokens: Record<string, any>,
-): Record<string, any> {
-  const existingRules = (existingTokens as any)?.accessRules;
-  const replacement: Record<string, any> = { ...freshTokens };
-  if (existingRules !== undefined && replacement.accessRules === undefined) {
-    replacement.accessRules = existingRules;
-  }
-  return replacement;
-}
+const PRESERVED_ON_PASTE = ['accessRules', 'supabaseSettings'] as const;
 
 async function persistPasteConnectionFor(
   ctx: { instanceId?: string; userId: number; mcpSlug: string; userApiKey: string; res: express.Response },
@@ -1074,10 +1066,9 @@ async function persistPasteConnectionFor(
       res.status(404).json({ error: 'Instance not found or access denied.' });
       return;
     }
-    await updateMcpInstanceProviderTokens(
-      existing.instanceId,
-      pasteReplacementTokens(existing.providerTokens, opts.providerTokens) as any,
-    );
+    await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any, {
+      keepIfAbsent: PRESERVED_ON_PASTE,
+    });
 
     // Drop the cached session, or the replaced credential changes nothing that
     // matters: the session cache memoises by `${apiKey}:${instanceId}` in a
@@ -2287,8 +2278,13 @@ function registerSharedRoutes(app: express.Express): void {
           res.status(404).send('Instance not found or access denied.');
           return null;
         }
+        // The store applies the same carry inside the UPDATE, against the row
+        // as it is then, so a setting saved while this reconnect ran survives.
+        // `merged` is only this function's answer.
         const merged = mergeProviderReconnectTokens(freshTokens, existing.providerTokens as any);
-        await updateMcpInstanceProviderTokens(existing.instanceId, merged);
+        await updateMcpInstanceProviderTokens(existing.instanceId, freshTokens, {
+          keepIfAbsent: PRESERVED_ON_RECONNECT,
+        });
         // Credentials changed, so any cached health verdict is stale — drop it
         // or the Reconnect button lingers for the rest of the TTL and reads as
         // "reconnecting did nothing".
@@ -3247,6 +3243,56 @@ function registerSharedRoutes(app: express.Express): void {
     }
     return { user, connection };
   }
+
+  // Supabase connection settings: project limit, read-only, feature groups.
+  // Sent to Supabase as query parameters on its hosted URL, and enforced
+  // locally too (src/supabase/settings.ts).
+  app.get('/api/instances/:instanceId/supabase-settings', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'supabase', 'Supabase');
+      if (!owned) return;
+      const { SUPABASE_FEATURE_GROUPS } = await import('../supabase/settings.js');
+      const stored = (owned.connection.providerTokens as any)?.supabaseSettings ?? {};
+      res.json({
+        settings: {
+          projectRef: stored.projectRef ?? '',
+          readOnly: Boolean(stored.readOnly),
+          features: stored.features ?? [...SUPABASE_FEATURE_GROUPS],
+        },
+        featureGroups: SUPABASE_FEATURE_GROUPS,
+      });
+    } catch (err) {
+      console.error('[supabase-settings] error:', err);
+      res.status(500).json({ error: 'Failed to load Supabase settings' });
+    }
+  });
+
+  app.post('/api/instances/:instanceId/supabase-settings', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const { normalizeSupabaseSettings } = await import('../supabase/settings.js');
+      const normalized = normalizeSupabaseSettings((req.body as any)?.settings);
+      if ('error' in normalized) { res.status(400).json({ error: normalized.error }); return; }
+
+      const owned = await ownedConnection(req, res, 'supabase', 'Supabase');
+      if (!owned) return;
+      const instanceId = req.params.instanceId as string;
+      const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Patch the one key: the token lives beside it in provider_tokens, and a
+      // read-spread-replace would put back an older token than a concurrent
+      // refresh just stored. Nothing set = the default; delete (undefined)
+      // rather than store {}, a non-empty value that survives every reconnect.
+      await patchMcpInstanceProviderTokens(instanceId, {
+        supabaseSettings: Object.keys(normalized.settings).length ? normalized.settings : undefined,
+      });
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(owned.user.apiKey, instanceId);
+      console.error(`User ${owned.user.id} updated Supabase settings for ${instanceId}: ${JSON.stringify(normalized.settings)}`);
+      res.json({ success: true, settings: normalized.settings });
+    } catch (err) {
+      console.error('[supabase-settings] error:', err);
+      res.status(500).json({ error: 'Failed to save Supabase settings' });
+    }
+  });
 
   app.get('/api/instances/:instanceId/domain-rules', requireAuth, async (req: AuthenticatedRequest, res) => {
     try {

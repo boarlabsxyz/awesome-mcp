@@ -1,15 +1,26 @@
 # Supabase — notes for Claude
 
-**Status: NOT yet exercised live.** Every behaviour below is read off Supabase's published server and docs. On the first live run, check two things first: a 400 on every call (the protocol shape), and whether `confirm_cost_id` is really required for a client that cannot show forms.
+**Status: NOT yet exercised live.** Every behaviour below is read off Supabase's published server and docs. On the first live run, check these first: a 400 on every call (the protocol shape, or a `features` group the hosted platform rejects — `features` is now always sent with all ten groups), and whether `confirm_cost_id` is really required for a client that cannot show forms.
 
 ## Rules and limitations
 
 ### Proxy shape
 
-- **All 30 tools proxy Supabase's hosted MCP server** (`https://mcp.supabase.com/mcp`, published as `supabase-community/supabase-mcp`) under their upstream snake_case names. They cover Supabase's default feature groups minus `feedback`; storage, notebooks and edge-function secrets are not mirrored.
+- **Every tool proxies Supabase's hosted MCP server** (`https://mcp.supabase.com/mcp`, published as `supabase-community/supabase-mcp`) under its upstream snake_case name. Together they cover every feature group, including storage, feedback and notebooks. Two things are not mirrored: edge-function secrets, which need URL elicitation, and `delete_notebook`, which always asks for a form this proxy cannot show.
 - **Register each tool with `supabaseTool({...})`, using a literal name and description** — `scripts/buildMcpToolsDoc.mjs` reads them from source text (`supabaseTool` is in its `REGISTRATION_OPENERS`). A computed name or description drops out of `docs/MCP_TOOLS.md`.
 - **The target is `protocol: 'modern'`.** Supabase's handler uses the v2 SDK with `legacy: 'reject'` and answers the 2025 `initialize` handshake with **400**. So `src/util/mcpProxyClient.ts` sends one stateless `tools/call` carrying the 2026-07-28 `_meta` envelope (`io.modelcontextprotocol/{protocolVersion,clientInfo,clientCapabilities}`) plus `mcp-method`/`mcp-name` headers.
 - **Fall back to the legacy `initialize` trio only when the server says it is legacy-only** — `-32022` without the modern version in `data.supported`, or "not initialized". Any other 400 is a real error and is not retried. Browserbase and Pinecone stay on the legacy path.
+
+### Connection settings (`settings.ts`; NOT exercised live)
+
+- **Project limit, read-only and feature groups are per connection** (`providerTokens.supabaseSettings`), set from the dashboard's Settings dialog, and re-read on every call (`getSupabaseSettings`). The re-read **fails closed**: these are restrictions the user chose.
+- **Sent upstream as query parameters** on the constant origin (`hostedUrlFor`): `project_ref`, `read_only`, `features`. `features` is ALWAYS sent, because upstream leaves storage off unless it is named.
+- **Also enforced locally** (`argsForSettings`), because the tool list is fixed at registration. An off group, an account tool under a project limit, or a write under read-only is refused with the setting named. `execute_sql`/`run_notebook` stay available under read-only (upstream runs them read-only).
+- **A matching `project_id` is dropped** under a project limit, because upstream injects it; a different one is refused.
+- **Under a project limit, `delete_branch`/`merge_branch`/`reset_branch`/`rebase_branch` are refused** — they take only a `branch_id`, which Supabase does not tie to the limited project.
+- **`create_notebook` cells are loosely typed here** (`record`); Supabase validates the strict cell union and its log-dialect hint is not mirrored, so a bad cell fails upstream with Supabase's message.
+- **Preserved across reconnects:** listed in `PRESERVED_ON_RECONNECT` and `PRESERVED_ON_PASTE`, which the store carries inside the UPDATE (`keepIfAbsent`), so a setting saved mid-reconnect survives. An empty setting deletes the key rather than storing `{}`.
+- **Write settings and refreshed tokens with `patchMcpInstanceProviderTokens`**, never read, spread and replace: a refresh that read before a settings save would put the old settings back and lift a read-only or project limit.
 
 ### Confirmations
 
@@ -32,7 +43,7 @@
 
 - **Results are capped at 200k characters.** SQL results arrive inside an `<untrusted-data-…>` boundary, and the cap note says the cut text is still untrusted.
 - **Hidden behind `SUPABASE_ENABLED`** (strict `=== 'true'`; a restart, not a deploy), like Browserbase and Pinecone.
-- **The 18 read tools have `planned` REST entries only — no routes yet.** Wiring them is a separate `/add-rest-endpoint supabase` pass.
+- **The read tools have `planned` REST entries only — no routes yet.** Wiring them is a separate `/add-rest-endpoint supabase` pass.
 
 ## Source Files
 

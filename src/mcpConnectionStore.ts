@@ -759,22 +759,75 @@ export async function updateMcpInstanceTokens(
   }
 }
 
+/**
+ * Replaces provider_tokens whole.
+ *
+ * `keepIfAbsent` names keys to carry over from the row AS IT IS AT WRITE TIME
+ * whenever `providerTokens` leaves them empty (undefined, null or ''). The
+ * carry happens inside the UPDATE, not from an earlier read, so a reconnect
+ * cannot drop a setting saved while it ran.
+ */
 export async function updateMcpInstanceProviderTokens(
   instanceId: string,
-  providerTokens: ProviderTokens
+  providerTokens: ProviderTokens,
+  opts: { keepIfAbsent?: readonly string[] } = {}
 ): Promise<void> {
+  const keep = opts.keepIfAbsent ?? [];
+  const fresh: Record<string, unknown> = { ...providerTokens };
+  for (const key of keep) {
+    if (fresh[key] === undefined || fresh[key] === null || fresh[key] === '') delete fresh[key];
+  }
   if (isDatabaseAvailable()) {
     const pool = getPool();
     await pool.query(
-      `UPDATE mcp_connections SET provider_tokens = $1::jsonb, updated_at = NOW() WHERE instance_id = $2`,
-      [JSON.stringify(providerTokens), instanceId]
+      `UPDATE mcp_connections SET provider_tokens = COALESCE((
+         SELECT jsonb_object_agg(k, provider_tokens -> k) FROM unnest($3::text[]) AS k
+          WHERE provider_tokens ? k AND jsonb_typeof(provider_tokens -> k) <> 'null'
+       ), '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE instance_id = $2`,
+      [JSON.stringify(fresh), instanceId, keep]
     );
   } else {
     // File-based: find and update by instanceId
     await fileLoadConnections();
     const connection = connections.find(c => c.instanceId === instanceId);
     if (connection) {
-      connection.providerTokens = providerTokens;
+      const current = (connection.providerTokens ?? {}) as Record<string, unknown>;
+      const carried: Record<string, unknown> = {};
+      for (const key of keep) {
+        if (current[key] !== undefined && current[key] !== null) carried[key] = current[key];
+      }
+      connection.providerTokens = { ...carried, ...fresh } as unknown as ProviderTokens;
+      connection.updatedAt = new Date().toISOString();
+      await saveConnections();
+    }
+  }
+}
+
+/**
+ * Sets the given provider_tokens keys and deletes those given as undefined,
+ * leaving every other key as the row has it at write time. One statement, so
+ * two writers that own different keys (a token refresh, a settings save)
+ * cannot undo each other the way read, spread and replace can.
+ */
+export async function patchMcpInstanceProviderTokens(
+  instanceId: string,
+  changes: Record<string, unknown>
+): Promise<void> {
+  const removed = Object.keys(changes).filter(key => changes[key] === undefined);
+  if (isDatabaseAvailable()) {
+    const pool = getPool();
+    await pool.query(
+      `UPDATE mcp_connections SET provider_tokens = (COALESCE(provider_tokens, '{}'::jsonb) - $3::text[]) || $1::jsonb,
+         updated_at = NOW() WHERE instance_id = $2`,
+      [JSON.stringify(changes), instanceId, removed]
+    );
+  } else {
+    await fileLoadConnections();
+    const connection = connections.find(c => c.instanceId === instanceId);
+    if (connection) {
+      const next: Record<string, unknown> = { ...(connection.providerTokens as Record<string, unknown> | undefined), ...changes };
+      for (const key of removed) delete next[key];
+      connection.providerTokens = next as unknown as ProviderTokens;
       connection.updatedAt = new Date().toISOString();
       await saveConnections();
     }

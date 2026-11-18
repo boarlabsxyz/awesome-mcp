@@ -1165,6 +1165,24 @@
     </div>
   </div>
 
+  <div id="supabaseSettingsModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="supabaseSettingsModalTitle">
+    <div class="modal" style="max-width: 550px;">
+      <div class="modal-header">
+        <h3 id="supabaseSettingsModalTitle">Supabase Settings</h3>
+        <button class="btn-close" type="button" onclick="closeSupabaseSettings()" aria-label="Close dialog">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <p style="margin: 0 0 10px; color: #aaa; font-size: 13px;">These limit what this connection may do, on top of what its token can reach. Supabase enforces them, and so does this connector.</p>
+      <div id="supabaseSettingsContent" class="access-rules-content">
+        <p>Loading&hellip;</p>
+      </div>
+      <div style="margin-top: 12px;">
+        <button class="btn-connect-google" type="button" id="saveSupabaseSettingsBtn" onclick="saveSupabaseSettings()">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
   <div id="pineconeRulesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pineconeRulesModalTitle">
     <div class="modal" style="max-width: 600px;">
       <div class="modal-header">
@@ -1281,7 +1299,7 @@
     }
 
     function getTopmostOpenModal() {
-      const candidates = ['accessRulesModal', 'domainRulesModal', 'pineconeRulesModal', 'githubRulesModal', 'addToolModal', 'loginOverlay'];
+      const candidates = ['accessRulesModal', 'domainRulesModal', 'supabaseSettingsModal', 'pineconeRulesModal', 'githubRulesModal', 'addToolModal', 'loginOverlay'];
       for (const id of candidates) {
         const el = document.getElementById(id);
         if (el && !el.classList.contains('hidden')) return el;
@@ -1296,6 +1314,7 @@
       if (topmost.id === 'addToolModal') closeAddToolModal();
       else if (topmost.id === 'accessRulesModal') closeAccessRules();
       else if (topmost.id === 'domainRulesModal') closeDomainRules();
+      else if (topmost.id === 'supabaseSettingsModal') closeSupabaseSettings();
       else if (topmost.id === 'pineconeRulesModal') closePineconeRules();
       else if (topmost.id === 'githubRulesModal') closeGithubRules();
       // loginOverlay is not dismissible — sign-in required
@@ -1322,6 +1341,7 @@
     attachFocusTrap('addToolModal');
     attachFocusTrap('accessRulesModal');
     attachFocusTrap('domainRulesModal');
+    attachFocusTrap('supabaseSettingsModal');
     attachFocusTrap('pineconeRulesModal');
     attachFocusTrap('githubRulesModal');
     attachFocusTrap('loginOverlay');
@@ -1695,6 +1715,7 @@
               : ''}
             ${instance.provider === 'slack' ? `<button class="btn-rename" type="button" data-action="access-rules">Access Rules</button>` : ''}
             ${instance.provider === 'github' ? `<button class="btn-rename" type="button" data-action="github-access-rules" title="Limit which organizations this connector may reach. A guardrail, not a security boundary \u2014 see the note in the dialog.">Access Rules</button>` : ''}
+            ${instance.provider === 'supabase' ? `<button class="btn-rename" type="button" data-action="supabase-settings" title="Limit this connection to one project, make it read-only, or choose its feature groups.">Settings</button>` : ''}
             ${instance.provider === 'browserbase' ? `<button class="btn-rename" type="button" data-action="domain-rules" title="Limit which sites this browser may navigate to. A guardrail, not a security boundary \u2014 see the note in the dialog.">Domain Rules</button>` : ''}
             ${instance.provider === 'pinecone' ? `<button class="btn-rename" type="button" data-action="pinecone-rules" title="Limit which indexes and namespaces this connection may use, and switch it to read-only.">Access Rules</button>` : ''}
             <button class="btn-delete" type="button" data-action="delete">Delete</button>
@@ -2637,6 +2658,89 @@
       }
     }
 
+    // ---- Supabase connection settings ----
+    //
+    // Three options Supabase takes on its hosted URL. The server validates and
+    // stores them (normalizeSupabaseSettings); this form only collects them.
+    let supabaseSettingsInstanceId = null;
+    // Bumped on every open and close: a load that answers after its dialog was
+    // closed or reopened for another connection must not fill the form, or the
+    // next save writes one connection's settings onto another.
+    let supabaseSettingsRequestId = 0;
+    const SUPABASE_GROUP_LABELS = {
+      docs: 'Docs', account: 'Account (projects, organizations, costs)', database: 'Database', debugging: 'Debugging (logs, advisors)',
+      development: 'Development (URLs, keys, types)', functions: 'Edge Functions', branching: 'Branching (paid plans)',
+      storage: 'Storage', notebooks: 'Notebooks', feedback: 'Feedback to Supabase',
+    };
+
+    async function openSupabaseSettings(instanceId) {
+      const requestId = ++supabaseSettingsRequestId;
+      supabaseSettingsInstanceId = instanceId;
+      openModal(document.getElementById('supabaseSettingsModal'));
+      const content = document.getElementById('supabaseSettingsContent');
+      content.innerHTML = '<p>Loading&hellip;</p>';
+      try {
+        const response = await fetch(`/api/instances/${instanceId}/supabase-settings`, { credentials: 'include' });
+        if (!response.ok) throw new Error('Failed to load');
+        const data = await response.json();
+        if (requestId !== supabaseSettingsRequestId) return;
+        const s = data.settings || {};
+        const groups = data.featureGroups || [];
+        content.innerHTML = `
+          <div class="rules-section">
+            <label for="supabaseProjectRef" style="display:block; font-weight:600; margin-bottom:6px;">Limit to one project</label>
+            <input type="text" id="supabaseProjectRef" placeholder="project ref, e.g. abcdefghijklmnopqrst" value="${escapeHtml(s.projectRef || '')}" style="width:100%;" />
+            <p style="margin:4px 0 0; color:#aaa; font-size:12px;">Leave empty for every project the token reaches. When set, account tools (projects, organizations, costs) are off.</p>
+          </div>
+          <div class="rules-section">
+            <label><input type="checkbox" id="supabaseReadOnly" ${s.readOnly ? 'checked' : ''} /> Read-only</label>
+            <p style="margin:4px 0 0; color:#aaa; font-size:12px;">SQL runs as a read-only database user; migrations, deploys, branch changes and other writes are refused.</p>
+          </div>
+          <fieldset class="rules-section" style="border:none; padding:0;">
+            <legend style="font-weight:600; margin-bottom:6px;">Feature groups</legend>
+            ${groups.map(g => `<label style="display:block;"><input type="checkbox" class="supabase-feature" value="${escapeHtml(g)}" ${(s.features || []).includes(g) ? 'checked' : ''} /> ${escapeHtml(SUPABASE_GROUP_LABELS[g] || g)}</label>`).join('')}
+          </fieldset>`;
+      } catch (err) {
+        if (requestId !== supabaseSettingsRequestId) return;
+        content.innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
+      }
+    }
+
+    function closeSupabaseSettings() {
+      supabaseSettingsRequestId++;
+      closeModal(document.getElementById('supabaseSettingsModal'));
+      supabaseSettingsInstanceId = null;
+    }
+
+    async function saveSupabaseSettings() {
+      if (!supabaseSettingsInstanceId) return;
+      const btn = document.getElementById('saveSupabaseSettingsBtn');
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      try {
+        const settings = {
+          projectRef: (document.getElementById('supabaseProjectRef').value || '').trim(),
+          readOnly: document.getElementById('supabaseReadOnly').checked,
+          features: [...document.querySelectorAll('#supabaseSettingsContent .supabase-feature:checked')].map(el => el.value),
+        };
+        const response = await fetch(`/api/instances/${supabaseSettingsInstanceId}/supabase-settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ settings }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Failed to save Supabase settings');
+        closeSupabaseSettings();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
     // ---- Pinecone access rules ----
     //
     // A third self-contained flow, for the reason the Browserbase one is
@@ -3331,6 +3435,7 @@
         case 'copy':         copyUrl(id, btn); break;
         case 'access-rules': openAccessRules(id); break;
         case 'domain-rules': openDomainRules(id); break;
+        case 'supabase-settings': openSupabaseSettings(id); break;
         case 'pinecone-rules': openPineconeRules(id); break;
         case 'github-access-rules': openGithubRules(id); break;
         case 'delete':       deleteInstance(id, row.dataset.instanceName); break;
