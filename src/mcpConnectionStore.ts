@@ -808,30 +808,60 @@ export async function updateMcpInstanceProviderTokens(
  * leaving every other key as the row has it at write time. One statement, so
  * two writers that own different keys (a token refresh, a settings save)
  * cannot undo each other the way read, spread and replace can.
+ *
+ * `expect` makes it a compare-and-set, for a writer that merged into what it
+ * read: the write happens only while each named key still holds that value
+ * (undefined = absent). Resolves false when nothing was written — the row is
+ * gone, or an expected key changed — so the caller can re-read and retry, or
+ * report the connection missing, instead of claiming a save that never landed.
  */
 export async function patchMcpInstanceProviderTokens(
   instanceId: string,
-  changes: Record<string, unknown>
-): Promise<void> {
+  changes: Record<string, unknown>,
+  opts: { expect?: Record<string, unknown> } = {}
+): Promise<boolean> {
   const removed = Object.keys(changes).filter(key => changes[key] === undefined);
+  // JSON null stands for "absent": a missing key reads back as SQL NULL,
+  // which the COALESCE below turns into the same JSON null.
+  const expected = opts.expect
+    ? Object.fromEntries(Object.entries(opts.expect).map(([key, value]) => [key, value ?? null]))
+    : null;
   if (isDatabaseAvailable()) {
     const pool = getPool();
-    await pool.query(
+    const result = await pool.query(
       `UPDATE mcp_connections SET provider_tokens = (COALESCE(provider_tokens, '{}'::jsonb) - $3::text[]) || $1::jsonb,
-         updated_at = NOW() WHERE instance_id = $2`,
-      [JSON.stringify(changes), instanceId, removed]
+         updated_at = NOW()
+       WHERE instance_id = $2
+         AND ($4::jsonb IS NULL OR NOT EXISTS (
+           SELECT 1 FROM jsonb_each($4::jsonb) AS e
+            WHERE COALESCE(provider_tokens -> e.key, 'null'::jsonb) <> e.value
+         ))`,
+      [JSON.stringify(changes), instanceId, removed, expected ? JSON.stringify(expected) : null]
     );
-  } else {
-    await fileLoadConnections();
-    const connection = connections.find(c => c.instanceId === instanceId);
-    if (connection) {
-      const next: Record<string, unknown> = { ...(connection.providerTokens as Record<string, unknown> | undefined), ...changes };
-      for (const key of removed) delete next[key];
-      connection.providerTokens = next as unknown as ProviderTokens;
-      connection.updatedAt = new Date().toISOString();
-      await saveConnections();
-    }
+    return (result.rowCount ?? 0) > 0;
   }
+  await fileLoadConnections();
+  const connection = connections.find(c => c.instanceId === instanceId);
+  if (!connection) return false;
+  const current = (connection.providerTokens ?? {}) as Record<string, unknown>;
+  if (expected && Object.entries(expected).some(([key, value]) => stableJson(current[key] ?? null) !== stableJson(value))) {
+    return false;
+  }
+  const next: Record<string, unknown> = { ...current, ...changes };
+  for (const key of removed) delete next[key];
+  connection.providerTokens = next as unknown as ProviderTokens;
+  connection.updatedAt = new Date().toISOString();
+  await saveConnections();
+  return true;
+}
+
+/** JSON with sorted object keys, so equal values compare equal like jsonb's `=`. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
 }
 
 export async function clearMcpInstanceTokensCache(instanceId: string): Promise<void> {

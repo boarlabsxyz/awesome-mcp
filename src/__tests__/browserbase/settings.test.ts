@@ -9,7 +9,9 @@ import { hostedProxyFor, opEnd } from '../../browserbase/ops.js';
 import { createWebOnlyApp, mergeProviderReconnectTokens } from '../../website/webServer.js';
 import { createSession } from '../../website/sessionStore.js';
 import { createOrUpdateUser, getUserByGoogleId, UserTokens } from '../../userStore.js';
-import { createMcpInstance, getMcpConnectionByInstanceId, GoogleTokens } from '../../mcpConnectionStore.js';
+import {
+  createMcpInstance, disconnectMcpInstance, getMcpConnectionByInstanceId, GoogleTokens, patchMcpInstanceProviderTokens,
+} from '../../mcpConnectionStore.js';
 import { createMcpCatalog } from '../../mcpCatalogStore.js';
 
 const KEY = 'sk-test-0123456789abcdef';
@@ -28,6 +30,23 @@ describe('Browserbase settings', () => {
       { settings: { modelName: 'openai/gpt-4.1', modelApiKey: KEY, proxies: true } });
     assert.match((mergeBrowserbaseSettings(stored, { modelName: 'openai/gpt-4.1', modelApiKey: null }) as any).error, /needs its provider's API key/);
     assert.deepEqual(mergeBrowserbaseSettings(stored, { modelName: '', modelApiKey: null }), { settings: {} });
+  });
+
+  it('keeps the stored model and key when a request leaves the model out; a blank model resets both', () => {
+    const stored = { modelName: 'openai/gpt-4.1', modelApiKey: KEY, proxies: true };
+    assert.deepEqual(mergeBrowserbaseSettings(stored, { verified: true }),
+      { settings: { modelName: 'openai/gpt-4.1', modelApiKey: KEY, proxies: true, verified: true } });
+    assert.deepEqual(mergeBrowserbaseSettings(stored, { modelName: '' }), { settings: { proxies: true } });
+    assert.deepEqual(mergeBrowserbaseSettings(stored, { modelName: null }), { settings: { proxies: true } });
+  });
+
+  it('reuses a saved key only for the same provider', () => {
+    const stored = { modelName: 'anthropic/claude-sonnet-4', modelApiKey: KEY };
+    assert.deepEqual(mergeBrowserbaseSettings(stored, { modelName: 'anthropic/claude-opus-4' }),
+      { settings: { modelName: 'anthropic/claude-opus-4', modelApiKey: KEY } });
+    assert.match((mergeBrowserbaseSettings(stored, { modelName: 'openai/gpt-4.1' }) as any).error, /saved key is for anthropic.*openai API key/);
+    assert.deepEqual(mergeBrowserbaseSettings(stored, { modelName: 'openai/gpt-4.1', modelApiKey: 'sk-other-0123456789' }),
+      { settings: { modelName: 'openai/gpt-4.1', modelApiKey: 'sk-other-0123456789' } });
   });
 
   it('keeps stored flags a request leaves out', () => {
@@ -52,6 +71,33 @@ describe('Browserbase settings', () => {
       await assert.rejects(
         () => proxyHostedTool('bb_key', 'extract', { instruction: 'x', sessionId: 's1' }, {}, { modelName: 'openai/gpt-4.1', modelApiKey: KEY }),
         (e: any) => !String(e.message).includes(KEY) && /\[redacted\]/.test(e.message),
+      );
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('scrubs the key before any cut, so truncation cannot leave a prefix of it', async () => {
+    // Shaped like no known credential, so only the exact-value scrub can catch
+    // it. It straddles the transport's 400-character cut; the filler does not
+    // repeat, since a repeated run is collapsed before any cut.
+    const bare = 'Zq9Xw2Lm7Np4Rt6Vy8BcHk3J';
+    const filler = Array.from({ length: 120 }, (_, i) => `w${i}`).join(' ').slice(0, 390);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      const body = JSON.parse(init.body);
+      const payload = body.method === 'tools/call'
+        ? { error: { code: -32000, message: `${filler}${bare}` } }
+        : { result: { protocolVersion: '2025-03-26', capabilities: {}, serverInfo: { name: 'x', version: '1' } } };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, ...payload }), {
+        status: 200, headers: { 'content-type': 'application/json', 'mcp-session-id': 's' },
+      });
+    }) as typeof fetch;
+    try {
+      const { proxyHostedTool } = await import('../../browserbase/mcpProxyClient.js');
+      await assert.rejects(
+        () => proxyHostedTool('bb_key', 'extract', { instruction: 'x', sessionId: 's1' }, {}, { modelName: 'openai/gpt-4.1', modelApiKey: bare }),
+        (e: any) => !String(e.message).includes(bare.slice(0, 6)) && /\[redacted\]/.test(e.message),
       );
     } finally {
       globalThis.fetch = realFetch;
@@ -105,9 +151,15 @@ describe('Browserbase settings', () => {
       });
     }) as typeof fetch;
     try {
-      await hostedProxyFor('bb_key', async () => ({ proxies: true }))('observe', { instruction: 'x', sessionId: 's1' }).catch(() => {});
-      assert.ok(urls.length > 0);
-      assert.ok(urls.every((u) => new URL(u).searchParams.get('proxies') === 'true'));
+      let current: Record<string, boolean> = { proxies: true };
+      const proxy = hostedProxyFor('bb_key', async () => current);
+      assert.equal(await proxy('observe', { instruction: 'x', sessionId: 's1' }), 'ok');
+      const first = urls.splice(0);
+      current = { verified: true };
+      assert.equal(await proxy('observe', { instruction: 'x', sessionId: 's1' }), 'ok');
+      assert.ok(first.length > 0 && urls.length > 0);
+      assert.ok(first.every((u) => new URL(u).searchParams.get('proxies') === 'true' && !new URL(u).searchParams.has('verified')));
+      assert.ok(urls.every((u) => new URL(u).searchParams.get('verified') === 'true' && !new URL(u).searchParams.has('proxies')));
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -121,7 +173,6 @@ describe('Browserbase settings', () => {
 
 const COOKIE_SECRET = process.env.COOKIE_SECRET || 'dev-secret-change-me';
 const signCookie = (val: string) => `s:${val}.${crypto.createHmac('sha256', COOKIE_SECRET).update(val).digest('base64').replace(/=+$/, '')}`;
-const OWNER_ID = 9501;
 const dummyTokens: UserTokens = { access_token: 'acc', refresh_token: 'ref', scope: 'email', token_type: 'Bearer', expiry_date: Date.now() + 3600_000 };
 const emptyGoogleTokens: GoogleTokens = { access_token: '', refresh_token: '', scope: '', token_type: '', expiry_date: 0 };
 
@@ -129,6 +180,7 @@ describe('Browserbase settings dashboard routes', () => {
   const app = createWebOnlyApp();
   let cookie: string;
   let id: string;
+  let ownerId: number;
 
   before(async () => {
     if (!process.env.GOOGLE_CREDENTIALS) {
@@ -140,8 +192,8 @@ describe('Browserbase settings dashboard routes', () => {
     });
     await createOrUpdateUser({ email: 'bb-settings@example.com', googleId: 'google-bb-settings', name: 'BB' }, dummyTokens);
     const user = await getUserByGoogleId('google-bb-settings');
-    if (user) (user as any).id = OWNER_ID;
-    id = (await createMcpInstance(OWNER_ID, 'browserbase', 'BB', emptyGoogleTokens, null, 'browserbase', { access_token: 'bb_key' } as any, null)).instanceId;
+    ownerId = user!.id!;
+    id = (await createMcpInstance(ownerId, 'browserbase', 'BB', emptyGoogleTokens, null, 'browserbase', { access_token: 'bb_key' } as any, null)).instanceId;
     cookie = `session=${signCookie(await createSession('google-bb-settings'))}`;
   });
 
@@ -161,10 +213,35 @@ describe('Browserbase settings dashboard routes', () => {
   });
 
   it('an update without a key keeps the saved one; a bad body is 400', async () => {
+    await patchMcpInstanceProviderTokens(id, { browserbaseSettings: { modelName: 'openai/gpt-4.1', modelApiKey: KEY } });
     await request(app).post(`/api/instances/${id}/browserbase-settings`).set('Cookie', cookie)
       .send({ settings: { modelName: 'openai/gpt-4.1', keepAlive: true } }).expect(200);
     assert.equal(((await getMcpConnectionByInstanceId(id))?.providerTokens as any).browserbaseSettings.modelApiKey, KEY);
     const bad = await request(app).post(`/api/instances/${id}/browserbase-settings`).set('Cookie', cookie).send({ settings: { keepAlive: 'yes' } });
     assert.equal(bad.status, 400);
+  });
+
+  it('answers 404, and writes nothing, when the connection is gone', async () => {
+    const doomed = (await createMcpInstance(ownerId, 'browserbase', 'Doomed', emptyGoogleTokens, null, 'browserbase', { access_token: 'bb_key' } as any, null)).instanceId;
+    await disconnectMcpInstance(doomed);
+    const res = await request(app).post(`/api/instances/${doomed}/browserbase-settings`).set('Cookie', cookie).send({ settings: { proxies: true } });
+    assert.equal(res.status, 404);
+    assert.equal(await patchMcpInstanceProviderTokens(doomed, { browserbaseSettings: { proxies: true } }), false);
+  });
+});
+
+describe('patchMcpInstanceProviderTokens with expect', () => {
+  it('writes only while the expected keys still hold what the caller read', async () => {
+    const id = (await createMcpInstance(1, 'browserbase', 'CAS', emptyGoogleTokens, null, 'browserbase', {
+      access_token: 'bb_key', browserbaseSettings: { proxies: true, keepAlive: true },
+    } as any, null)).instanceId;
+    const stored = async () => (await getMcpConnectionByInstanceId(id))?.providerTokens as any;
+    // A save landed since the read: refused, nothing written.
+    assert.equal(await patchMcpInstanceProviderTokens(id, { browserbaseSettings: { verified: true } }, { expect: { browserbaseSettings: { proxies: true } } }), false);
+    assert.deepEqual((await stored()).browserbaseSettings, { proxies: true, keepAlive: true });
+    // Key order does not matter, like jsonb equality; absent is expected as undefined.
+    assert.equal(await patchMcpInstanceProviderTokens(id, { browserbaseSettings: undefined }, { expect: { browserbaseSettings: { keepAlive: true, proxies: true } } }), true);
+    assert.equal(await patchMcpInstanceProviderTokens(id, { browserbaseSettings: { verified: true } }, { expect: { browserbaseSettings: undefined } }), true);
+    assert.deepEqual(await stored(), { access_token: 'bb_key', browserbaseSettings: { verified: true } });
   });
 });

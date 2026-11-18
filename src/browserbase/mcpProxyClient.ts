@@ -55,7 +55,14 @@ export function hostedMcpUrl(): string {
   return HOSTED_MCP_URL;
 }
 
+/** Removes the user's exact model key, which no `modelApiKey=` pattern catches. */
+function keyScrubber(settings?: BrowserbaseSettings): (text: string) => string {
+  const key = settings?.modelApiKey;
+  return text => (key ? text.split(key).join('[redacted]') : text);
+}
+
 function targetFor(apiKey: string, settings?: BrowserbaseSettings): McpProxyTarget {
+  const scrubKey = keyScrubber(settings);
   return {
     // The constant origin; settings only add Browserbase's documented query
     // parameters (settings.ts). The model key rides here because Browserbase
@@ -70,7 +77,10 @@ function targetFor(apiKey: string, settings?: BrowserbaseSettings): McpProxyTarg
     headers: () => ({ authorization: `Bearer ${apiKey}` }),
     timeoutMs: REQUEST_TIMEOUT_MS,
     label: 'Browserbase hosted MCP',
-    sanitizeText: safeErrorText,
+    // The exact key goes first: safeErrorText's cap, and the transport's own
+    // 400-character cut after this hook, could each cut through the key and
+    // leave a prefix the later exact-match scrub misses.
+    sanitizeText: text => safeErrorText(scrubKey(text)),
     explainUnauthorized: () =>
       'Browserbase rejected the API key. Reconnect from the dashboard with a current key from https://www.browserbase.com/settings.',
   };
@@ -146,8 +156,10 @@ export async function proxyHostedTool(
   // provider error can quote it verbatim ("Incorrect API key provided: …"),
   // which no `modelApiKey=` pattern catches. Its exact value is removed from
   // everything this returns or throws.
+  // The transport hook already did this for the errors it builds; this covers
+  // results and errors that never pass through it.
   const key = settings?.modelApiKey;
-  const scrub = (text: string) => (key ? text.split(key).join('[redacted]') : text);
+  const scrub = keyScrubber(settings);
   let result: ProxyToolResult;
   try {
     result = await callHostedTool(apiKey, name, args, options, settings);

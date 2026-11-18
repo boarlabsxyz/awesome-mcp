@@ -31,9 +31,13 @@ const MODEL_NAME = /^[a-z0-9][a-z0-9-]{0,40}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,100}$
 const MODEL_API_KEY = /^[A-Za-z0-9._~+/=:-]{8,512}$/;
 
 /**
- * Merge what the dashboard posts into the stored settings. `modelApiKey`:
- * a string replaces it, null clears it, absent keeps the stored one (the
- * dashboard never has it to send back).
+ * Merge what the dashboard posts into the stored settings.
+ *
+ * `modelName`: absent keeps the stored model (and its key); '' / null / the
+ * default resets to Browserbase's default. `modelApiKey`: a string replaces
+ * it, null clears it, absent keeps the stored one (the dashboard never has it
+ * to send back) — but only for the same provider: an Anthropic key is never
+ * reused for an OpenAI model.
  */
 export function mergeBrowserbaseSettings(
   stored: BrowserbaseSettings | undefined,
@@ -43,21 +47,28 @@ export function mergeBrowserbaseSettings(
   const r = raw as Record<string, unknown>;
   const out: BrowserbaseSettings = {};
 
-  const model = typeof r.modelName === 'string' ? r.modelName.trim() : '';
   if (r.modelName !== undefined && r.modelName !== null && typeof r.modelName !== 'string') return { error: 'modelName must be a string' };
+  const model = r.modelName === undefined ? (stored?.modelName ?? '') : typeof r.modelName === 'string' ? r.modelName.trim() : '';
   if (model && model !== BROWSERBASE_DEFAULT_MODEL) {
     if (!MODEL_NAME.test(model)) return { error: 'modelName must be provider/model, e.g. openai/gpt-4.1' };
     out.modelName = model;
   }
 
-  let key = stored?.modelApiKey;
+  const storedProvider = providerOf(stored?.modelName);
+  const sameProvider = Boolean(out.modelName) && providerOf(out.modelName) === storedProvider;
+  let key = sameProvider ? stored?.modelApiKey : undefined;
   if (r.modelApiKey === null) key = undefined;
   else if (typeof r.modelApiKey === 'string' && r.modelApiKey.trim()) {
     const k = r.modelApiKey.trim();
     if (!MODEL_API_KEY.test(k)) return { error: 'modelApiKey does not look like an API key' };
     key = k;
   } else if (r.modelApiKey !== undefined && r.modelApiKey !== '') return { error: 'modelApiKey must be a string, or null to clear it' };
-  if (out.modelName && !key) return { error: `A model other than ${BROWSERBASE_DEFAULT_MODEL} needs its provider's API key` };
+  if (out.modelName && !key) {
+    if (stored?.modelApiKey && !sameProvider && r.modelApiKey !== null) {
+      return { error: `The saved key is for ${storedProvider}; ${out.modelName} needs a ${providerOf(out.modelName)} API key` };
+    }
+    return { error: `A model other than ${BROWSERBASE_DEFAULT_MODEL} needs its provider's API key` };
+  }
   // A key with no model to use it for is not kept: it would sit unused, and a
   // stored secret nobody needs is only exposure.
   if (out.modelName && key) out.modelApiKey = key;
@@ -71,6 +82,11 @@ export function mergeBrowserbaseSettings(
     if (value) out[flag] = true;
   }
   return { settings: out };
+}
+
+/** `openai` for `openai/gpt-4.1`. */
+function providerOf(modelName: string | undefined): string | undefined {
+  return modelName?.split('/')[0];
 }
 
 /** What the dashboard may see: everything but the key itself. */

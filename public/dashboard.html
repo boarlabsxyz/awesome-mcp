@@ -2683,16 +2683,26 @@
     // The model API key is write-only: the server only says whether one is set,
     // so the field starts empty and an empty field means "keep the stored key".
     let browserbaseSettingsInstanceId = null;
+    // Bumped on every open and close. A load or save answers only the opening
+    // that started it: a late answer for A must not fill, close or report into
+    // the dialog since reopened for B, or the next save writes A's settings to B.
+    let browserbaseSettingsOpening = 0;
 
     async function openBrowserbaseSettings(instanceId) {
+      const opening = ++browserbaseSettingsOpening;
       browserbaseSettingsInstanceId = instanceId;
       openModal(document.getElementById('browserbaseSettingsModal'));
       const content = document.getElementById('browserbaseSettingsContent');
+      const btn = document.getElementById('saveBrowserbaseSettingsBtn');
+      // No form yet (or a failed load) means nothing to save.
+      btn.disabled = true;
+      btn.textContent = 'Save Settings';
       content.innerHTML = '<p>Loading&hellip;</p>';
       try {
         const response = await fetch(`/api/instances/${instanceId}/browserbase-settings`, { credentials: 'include' });
         if (!response.ok) throw new Error('Failed to load');
         const s = (await response.json()).settings || {};
+        if (opening !== browserbaseSettingsOpening) return;
         content.innerHTML = `
           <div class="rules-section">
             <label for="bbModelName" style="display:block; font-weight:600; margin-bottom:6px;">Automation model</label>
@@ -2702,7 +2712,7 @@
           <div class="rules-section">
             <label for="bbModelApiKey" style="display:block; font-weight:600; margin-bottom:6px;">Model API key</label>
             <input type="password" id="bbModelApiKey" autocomplete="off" placeholder="${s.modelApiKeySet ? 'A key is saved — type a new one to replace it' : 'Your key for that model provider'}" style="width:100%;" />
-            ${s.modelApiKeySet ? '<label style="display:block; margin-top:4px;"><input type="checkbox" id="bbClearKey" /> Remove the saved key</label>' : ''}
+            ${s.modelApiKeySet ? '<label style="display:block; margin-top:4px;"><input type="checkbox" id="bbClearKey" /> Remove the saved key <span style="color:#aaa;">(also clear the model above: only the default model runs without a key)</span></label>' : ''}
             <p style="margin:4px 0 0; color:#aaa; font-size:12px;">Stored with this connection and sent only to Browserbase. It is never shown again.</p>
           </div>
           <div class="rules-section">
@@ -2711,18 +2721,22 @@
             <label style="display:block;"><input type="checkbox" id="bbVerified" ${s.verified ? 'checked' : ''} /> Verified browser (anti-bot)</label>
             <p style="margin:4px 0 0; color:#aaa; font-size:12px;">Keep-alive, proxies and verified depend on your Browserbase plan.</p>
           </div>`;
+        btn.disabled = false;
       } catch (err) {
+        if (opening !== browserbaseSettingsOpening) return;
         content.innerHTML = `<p style="color: #dc3545;" role="alert">Error: ${escapeHtml(err.message)}</p>`;
       }
     }
 
     function closeBrowserbaseSettings() {
+      browserbaseSettingsOpening++;
       closeModal(document.getElementById('browserbaseSettingsModal'));
       browserbaseSettingsInstanceId = null;
     }
 
     async function saveBrowserbaseSettings() {
       if (!browserbaseSettingsInstanceId) return;
+      const opening = browserbaseSettingsOpening;
       const btn = document.getElementById('saveBrowserbaseSettingsBtn');
       const original = btn.textContent;
       btn.disabled = true;
@@ -2745,13 +2759,18 @@
           body: JSON.stringify({ settings }),
         });
         const data = await response.json().catch(() => ({}));
+        // Closed, or reopened for another connection, while saving: leave
+        // that dialog and its button alone.
+        if (opening !== browserbaseSettingsOpening) return;
         if (!response.ok) throw new Error(data.error || 'Failed to save Browserbase settings');
         closeBrowserbaseSettings();
       } catch (err) {
-        alert(err.message);
+        if (opening === browserbaseSettingsOpening) alert(err.message);
       } finally {
-        btn.disabled = false;
-        btn.textContent = original;
+        if (opening === browserbaseSettingsOpening) {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
       }
     }
 

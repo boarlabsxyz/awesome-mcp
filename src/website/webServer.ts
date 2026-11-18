@@ -372,6 +372,7 @@ import type { OutlineClient } from '../outline/apiHelpers.js';
 import type { HubSpotClient } from '../hubspot/apiHelpers.js';
 import type { RedmineClient } from '../redmine/apiHelpers.js';
 import type { BrowserbaseClient } from '../browserbase/apiHelpers.js';
+import type { BrowserbaseSettings } from '../browserbase/settings.js';
 import { checkConnectionHealth, type ConnectionHealth } from './connectionHealth.js';
 import { discoverConnectedOrgs, type OrgDiscoveryResult } from '../slack-user/orgDiscovery.js';
 import { buildSimpleInstanceName, type ValidateResult } from '../util/pasteTokenValidation.js';
@@ -3266,19 +3267,34 @@ function registerSharedRoutes(app: express.Express): void {
       if (!owned) return;
       const instanceId = req.params.instanceId as string;
       const { mergeBrowserbaseSettings, publicBrowserbaseSettings } = await import('../browserbase/settings.js');
-      // Re-read right before merging; the merge keeps the stored model key
-      // unless the request replaces or clears it.
-      const latest = await getMcpConnectionByInstanceId(instanceId);
-      const stored = ((latest ?? owned.connection).providerTokens as any)?.browserbaseSettings;
-      const merged = mergeBrowserbaseSettings(stored, (req.body as any)?.settings);
-      if ('error' in merged) { res.status(400).json({ error: merged.error }); return; }
       const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
-      // Patch the one key: the Browserbase key lives beside it, and a
-      // read-spread-replace would put back the key a concurrent re-paste just
-      // replaced. Nothing set = delete (undefined), never store {}.
-      await patchMcpInstanceProviderTokens(instanceId, {
-        browserbaseSettings: Object.keys(merged.settings).length ? merged.settings : undefined,
-      });
+      // The merge reads the stored settings (it keeps the model key unless the
+      // request replaces or clears it), so the write is a compare-and-set on
+      // what it read: a save that landed in between is merged into, never
+      // overwritten — a retry cannot bring back a key another save cleared.
+      // Only the one key is patched, so the Browserbase key beside it is never
+      // put back either. Nothing set = delete (undefined), never store {}.
+      let merged: { settings: BrowserbaseSettings } | undefined;
+      for (let attempt = 0; attempt < 3 && !merged; attempt++) {
+        const latest = await getMcpConnectionByInstanceId(instanceId);
+        if (!latest) { res.status(404).json({ error: 'Browserbase connection not found' }); return; }
+        const stored = (latest.providerTokens as any)?.browserbaseSettings;
+        const next = mergeBrowserbaseSettings(stored, (req.body as any)?.settings);
+        if ('error' in next) { res.status(400).json({ error: next.error }); return; }
+        const written = await patchMcpInstanceProviderTokens(
+          instanceId,
+          { browserbaseSettings: Object.keys(next.settings).length ? next.settings : undefined },
+          { expect: { browserbaseSettings: stored } },
+        );
+        if (written) merged = next;
+      }
+      if (!merged) {
+        const gone = !(await getMcpConnectionByInstanceId(instanceId));
+        res.status(gone ? 404 : 409).json({
+          error: gone ? 'Browserbase connection not found' : 'The settings kept changing while saving; reload them and try again',
+        });
+        return;
+      }
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(owned.user.apiKey, instanceId);
       const visible = publicBrowserbaseSettings(merged.settings);
@@ -3327,9 +3343,11 @@ function registerSharedRoutes(app: express.Express): void {
       // read-spread-replace would put back an older token than a concurrent
       // refresh just stored. Nothing set = the default; delete (undefined)
       // rather than store {}, a non-empty value that survives every reconnect.
-      await patchMcpInstanceProviderTokens(instanceId, {
+      const written = await patchMcpInstanceProviderTokens(instanceId, {
         supabaseSettings: Object.keys(normalized.settings).length ? normalized.settings : undefined,
       });
+      // Deleted (another tab) since the ownership check: nothing was saved.
+      if (!written) { res.status(404).json({ error: 'Supabase connection not found' }); return; }
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(owned.user.apiKey, instanceId);
       console.error(`User ${owned.user.id} updated Supabase settings for ${instanceId}: ${JSON.stringify(normalized.settings)}`);
@@ -3387,14 +3405,11 @@ function registerSharedRoutes(app: express.Express): void {
       const owned = await ownedConnection(req, res, 'browserbase', 'Browserbase');
       if (!owned) return;
 
-      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
-      // Spread, because updateMcpInstanceProviderTokens replaces the whole
-      // provider_tokens column — a bare { accessRules } would drop the API key.
-      const updatedTokens = {
-        ...(owned.connection.providerTokens as any),
-        accessRules: { allowedDomains, blockedDomains },
-      };
-      await updateMcpInstanceProviderTokens(instanceId, updatedTokens);
+      const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Patch the one key: a spread of the record read for the ownership check
+      // would put back a Browserbase key or settings changed since.
+      const written = await patchMcpInstanceProviderTokens(instanceId, { accessRules: { allowedDomains, blockedDomains } });
+      if (!written) { res.status(404).json({ error: 'Browserbase connection not found' }); return; }
 
       // Mandatory, not hygiene: getRules re-reads per call but the SESSION is
       // memoised by `${apiKey}:${instanceId}` with no TTL, so a stale session
