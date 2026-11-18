@@ -649,7 +649,7 @@ export function computeTokenStatus(
  * one of these keys has the same trap — omit the key on the reconnect path and
  * let the stored value win.
  */
-const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl', 'browserbaseSettings'] as const;
+const PRESERVED_ON_RECONNECT = ['refresh_token', 'accessRules', 'baseUrl', 'supabaseSettings', 'browserbaseSettings'] as const;
 
 /**
  * Non-Google sibling of mergeReconnectTokens: carry forward anything the fresh
@@ -1036,8 +1036,8 @@ interface PasteConnectionOpts {
  * rather than buried three levels into a route.
  */
 /**
- * What a paste-token re-auth should store: the freshly built record, plus the
- * one key it cannot reproduce.
+ * What a paste-token re-auth keeps from the stored record: the freshly built
+ * record replaces the rest.
  *
  * This path is a near-straight replace, unlike the OAuth reconnect — the paste
  * flow produces every field it stores (access_token, plus baseUrl for the
@@ -1048,26 +1048,13 @@ interface PasteConnectionOpts {
  * WIDEN access on reconnect — the one direction a reconnect must never move,
  * which is exactly why the OAuth path lists accessRules in
  * PRESERVED_ON_RECONNECT. That merge does not run here, so this path carries
- * the key itself. Filled in only when the fresh record omits it, so a builder
- * that deliberately sets rules still wins.
+ * the key itself. Same for Supabase's read-only / project limit, and for the
+ * Browserbase settings, which hold a model key the user typed once. Filled in
+ * only when the fresh record leaves the key empty, so a builder that
+ * deliberately sets rules still wins; the store carries it inside the UPDATE,
+ * so a rule saved while the re-auth ran is kept too.
  */
-function pasteReplacementTokens(
-  existingTokens: unknown,
-  freshTokens: Record<string, any>,
-): Record<string, any> {
-  const existingRules = (existingTokens as any)?.accessRules;
-  const replacement: Record<string, any> = { ...freshTokens };
-  if (existingRules !== undefined && replacement.accessRules === undefined) {
-    replacement.accessRules = existingRules;
-  }
-  // Browserbase settings hold a model key the user typed once; a re-pasted
-  // Browserbase key must not silently drop it (or the model choice).
-  const existingBrowserbase = (existingTokens as any)?.browserbaseSettings;
-  if (existingBrowserbase !== undefined && replacement.browserbaseSettings === undefined) {
-    replacement.browserbaseSettings = existingBrowserbase;
-  }
-  return replacement;
-}
+const PRESERVED_ON_PASTE = ['accessRules', 'supabaseSettings', 'browserbaseSettings'] as const;
 
 async function persistPasteConnectionFor(
   ctx: { instanceId?: string; userId: number; mcpSlug: string; userApiKey: string; res: express.Response },
@@ -1080,10 +1067,9 @@ async function persistPasteConnectionFor(
       res.status(404).json({ error: 'Instance not found or access denied.' });
       return;
     }
-    await updateMcpInstanceProviderTokens(
-      existing.instanceId,
-      pasteReplacementTokens(existing.providerTokens, opts.providerTokens) as any,
-    );
+    await updateMcpInstanceProviderTokens(existing.instanceId, opts.providerTokens as any, {
+      keepIfAbsent: PRESERVED_ON_PASTE,
+    });
 
     // Drop the cached session, or the replaced credential changes nothing that
     // matters: the session cache memoises by `${apiKey}:${instanceId}` in a
@@ -1389,6 +1375,8 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   '/api/v1/hubspot/tasks',    // createTask — free text
   '/api/v1/hubspot/calls',    // logCall — can be a whole transcript
   '/api/v1/hubspot/meetings', // logMeeting — can be full minutes
+  '/api/v1/hubspot/emails',   // logEmail — an email body, possibly HTML
+  '/api/v1/hubspot/engagements', // updateEngagement — can replace any of the bodies above
   '/api/v1/pinecone/indexes', // upsert-records — a bulk record load, up to Pinecone's 2 MB body limit
   // Docs writes carry document-sized payloads: appended text, an import body,
   // a 50-operation batch, a base64 image.
@@ -2291,8 +2279,13 @@ function registerSharedRoutes(app: express.Express): void {
           res.status(404).send('Instance not found or access denied.');
           return null;
         }
+        // The store applies the same carry inside the UPDATE, against the row
+        // as it is then, so a setting saved while this reconnect ran survives.
+        // `merged` is only this function's answer.
         const merged = mergeProviderReconnectTokens(freshTokens, existing.providerTokens as any);
-        await updateMcpInstanceProviderTokens(existing.instanceId, merged);
+        await updateMcpInstanceProviderTokens(existing.instanceId, freshTokens, {
+          keepIfAbsent: PRESERVED_ON_RECONNECT,
+        });
         // Credentials changed, so any cached health verdict is stale — drop it
         // or the Reconnect button lingers for the rest of the TTL and reads as
         // "reconnecting did nothing".
@@ -3273,16 +3266,19 @@ function registerSharedRoutes(app: express.Express): void {
       if (!owned) return;
       const instanceId = req.params.instanceId as string;
       const { mergeBrowserbaseSettings, publicBrowserbaseSettings } = await import('../browserbase/settings.js');
-      // Re-read right before writing; the merge keeps the stored model key
+      // Re-read right before merging; the merge keeps the stored model key
       // unless the request replaces or clears it.
       const latest = await getMcpConnectionByInstanceId(instanceId);
-      const tokens = { ...((latest ?? owned.connection).providerTokens as any) };
-      const merged = mergeBrowserbaseSettings(tokens.browserbaseSettings, (req.body as any)?.settings);
+      const stored = ((latest ?? owned.connection).providerTokens as any)?.browserbaseSettings;
+      const merged = mergeBrowserbaseSettings(stored, (req.body as any)?.settings);
       if ('error' in merged) { res.status(400).json({ error: merged.error }); return; }
-      if (Object.keys(merged.settings).length) tokens.browserbaseSettings = merged.settings;
-      else delete tokens.browserbaseSettings;
-      const { updateMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
-      await updateMcpInstanceProviderTokens(instanceId, tokens);
+      const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Patch the one key: the Browserbase key lives beside it, and a
+      // read-spread-replace would put back the key a concurrent re-paste just
+      // replaced. Nothing set = delete (undefined), never store {}.
+      await patchMcpInstanceProviderTokens(instanceId, {
+        browserbaseSettings: Object.keys(merged.settings).length ? merged.settings : undefined,
+      });
       const { clearMcpSessionCache } = await import('../userSession.js');
       clearMcpSessionCache(owned.user.apiKey, instanceId);
       const visible = publicBrowserbaseSettings(merged.settings);
@@ -3291,6 +3287,56 @@ function registerSharedRoutes(app: express.Express): void {
     } catch (err) {
       console.error('[browserbase-settings] error:', (err as Error)?.message);
       res.status(500).json({ error: 'Failed to save Browserbase settings' });
+    }
+  });
+
+  // Supabase connection settings: project limit, read-only, feature groups.
+  // Sent to Supabase as query parameters on its hosted URL, and enforced
+  // locally too (src/supabase/settings.ts).
+  app.get('/api/instances/:instanceId/supabase-settings', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const owned = await ownedConnection(req, res, 'supabase', 'Supabase');
+      if (!owned) return;
+      const { SUPABASE_FEATURE_GROUPS } = await import('../supabase/settings.js');
+      const stored = (owned.connection.providerTokens as any)?.supabaseSettings ?? {};
+      res.json({
+        settings: {
+          projectRef: stored.projectRef ?? '',
+          readOnly: Boolean(stored.readOnly),
+          features: stored.features ?? [...SUPABASE_FEATURE_GROUPS],
+        },
+        featureGroups: SUPABASE_FEATURE_GROUPS,
+      });
+    } catch (err) {
+      console.error('[supabase-settings] error:', err);
+      res.status(500).json({ error: 'Failed to load Supabase settings' });
+    }
+  });
+
+  app.post('/api/instances/:instanceId/supabase-settings', requireAuth, express.json(), async (req: AuthenticatedRequest, res) => {
+    try {
+      const { normalizeSupabaseSettings } = await import('../supabase/settings.js');
+      const normalized = normalizeSupabaseSettings((req.body as any)?.settings);
+      if ('error' in normalized) { res.status(400).json({ error: normalized.error }); return; }
+
+      const owned = await ownedConnection(req, res, 'supabase', 'Supabase');
+      if (!owned) return;
+      const instanceId = req.params.instanceId as string;
+      const { patchMcpInstanceProviderTokens } = await import('../mcpConnectionStore.js');
+      // Patch the one key: the token lives beside it in provider_tokens, and a
+      // read-spread-replace would put back an older token than a concurrent
+      // refresh just stored. Nothing set = the default; delete (undefined)
+      // rather than store {}, a non-empty value that survives every reconnect.
+      await patchMcpInstanceProviderTokens(instanceId, {
+        supabaseSettings: Object.keys(normalized.settings).length ? normalized.settings : undefined,
+      });
+      const { clearMcpSessionCache } = await import('../userSession.js');
+      clearMcpSessionCache(owned.user.apiKey, instanceId);
+      console.error(`User ${owned.user.id} updated Supabase settings for ${instanceId}: ${JSON.stringify(normalized.settings)}`);
+      res.json({ success: true, settings: normalized.settings });
+    } catch (err) {
+      console.error('[supabase-settings] error:', err);
+      res.status(500).json({ error: 'Failed to save Supabase settings' });
     }
   });
 
@@ -5973,6 +6019,23 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // POST /api/v1/drive/upload-sessions - Open a resumable upload for a large file
+  app.post('/api/v1/drive/upload-sessions', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { createDriveUploadSessionSchema, performCreateDriveUploadSession } = await import('../google-drive/filesOps.js');
+      const parsed = createDriveUploadSessionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      res.status(201).json(await performCreateDriveUploadSession(req.userSession!.googleDrive, parsed.data));
+    } catch (err: any) {
+      const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+      sendUpstreamError(res, err, { notFound: 'Parent folder not found', fallback: 'Failed to open upload session' });
+    }
+  });
+
   // GET /api/v1/drive/files/:fileId - Get file info
   app.get('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -6914,6 +6977,80 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/clickup/workspaces/:workspaceId/attachments?url= - Download a
+  // file ClickUp hosts on its attachments CDN (a recording linked from a Doc).
+  // Streams the bytes and honours Range. The URL is fetched BY THIS SERVER with
+  // the connection's token, so only this workspace's attachments host is
+  // accepted (src/clickup/attachments.ts).
+  app.get('/api/v1/clickup/workspaces/:workspaceId/attachments', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    const controller = new AbortController();
+    // A client that hangs up mid-recording must stop the upstream download too.
+    res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+    try {
+      const workspaceId = req.params.workspaceId as string;
+      const rawUrl = qstr(req.query.url);
+      if (!rawUrl) {
+        res.status(400).json({ error: 'Query param `url` is required: the attachment URL as it appears in a doc or task.' });
+        return;
+      }
+      const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
+      const {
+        AttachmentUrlError, attachmentFileName, contentDisposition, isForwardableRange,
+        openAttachment, parseAttachmentUrl, workspaceIsVisible,
+      } = await import('../clickup/attachments.js');
+      let url: URL;
+      try {
+        url = parseAttachmentUrl(rawUrl, workspaceId);
+      } catch (err) {
+        if (err instanceof AttachmentUrlError) { res.status(400).json({ error: err.message }); return; }
+        throw err;
+      }
+      if (range !== undefined && !isForwardableRange(range)) {
+        res.status(400).json({ error: `Unsupported Range header "${range}"; only bytes=start-end ranges are forwarded.` });
+        return;
+      }
+
+      const { ClickUpClient } = await import('../clickup/apiHelpers.js');
+      const token = req.userSession!.clickUpAccessToken!;
+      if (!workspaceIsVisible(await new ClickUpClient(token).getWorkspaces(), workspaceId)) {
+        res.status(404).json({ error: `Workspace ${workspaceId} is not visible to this ClickUp connection.` });
+        return;
+      }
+
+      const opened = await openAttachment(token, url, { range, signal: controller.signal });
+      if (!opened.ok) {
+        if (opened.contentRange) res.setHeader('Content-Range', opened.contentRange);
+        res.status(opened.status).json({ error: opened.error });
+        return;
+      }
+      const upstream = opened.response;
+      res.status(upstream.status);
+      for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+        const value = upstream.headers.get(header);
+        if (value) res.setHeader(header, value);
+      }
+      if (!upstream.headers.get('content-type')) res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', contentDisposition(attachmentFileName(url)));
+      if (!upstream.body) { res.end(); return; }
+      const { Readable } = await import('node:stream');
+      const { pipeline } = await import('node:stream/promises');
+      await pipeline(Readable.fromWeb(upstream.body as any), res);
+    } catch (err: any) {
+      if (res.headersSent) {
+        // Mid-stream failure: the status is already committed, so cut the
+        // connection — a short Content-Length then shows as a truncated file.
+        res.destroy(err);
+        return;
+      }
+      // Only the workspace lookup throws a ClickUp error; its status is
+      // Symbol-tagged, so copy it onto .code or sendUpstreamError answers 500.
+      const { clickUpErrorStatus } = await import('../clickup/apiHelpers.js');
+      const upstream = clickUpErrorStatus(err);
+      if (typeof upstream === 'number') (err as any).code = upstream;
+      sendUpstreamError(res, err, { fallback: 'Failed to download attachment' });
+    }
+  });
+
   // GET /api/v1/clickup/workspaces/:workspaceId/time - Get time entries
   app.get('/api/v1/clickup/workspaces/:workspaceId/time', requireClickUpApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -7616,6 +7753,13 @@ function registerRestApiRoutes(app: express.Express): void {
       run: async (m, c, a) => m.performCreateList(c, a),
     },
     {
+      path: '/api/v1/slack/lists/:listId/update',
+      status: 200,
+      fallback: 'Failed to update list',
+      schema: (m) => m.updateListRestSchema,
+      run: async (m, c, a, p) => m.performUpdateList(c, p.listId, a),
+    },
+    {
       path: '/api/v1/slack/lists/:listId/items',
       status: 201,
       fallback: 'Failed to create list item',
@@ -7875,6 +8019,20 @@ function registerRestApiRoutes(app: express.Express): void {
     fallback: string;
   }> = [
     {
+      path: '/api/v1/peopleforce/holidays',
+      fetch: (c, page) => c.listHolidays({ page }),
+      format: (h, r) => h.formatHolidayList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Holidays not found',
+      fallback: 'Failed to list holidays',
+    },
+    {
+      path: '/api/v1/peopleforce/holiday-policies',
+      fetch: (c, page) => c.listHolidayPolicies({ page }),
+      format: (h, r) => h.formatHolidayPolicyList(r.data ?? [], r.metadata?.pagination),
+      notFound: 'Holiday policies not found',
+      fallback: 'Failed to list holiday policies',
+    },
+    {
       path: '/api/v1/peopleforce/leave-types',
       fetch: (c, page) => c.listLeaveTypes({ page }),
       format: (h, r) => h.formatLeaveTypeList(r.data ?? [], r.metadata?.pagination),
@@ -8028,6 +8186,14 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to list leave balances',
     },
     {
+      // 403 here usually means the key may not view compensation, not a bad key.
+      path: '/api/v1/peopleforce/employees/:employeeId/salaries',
+      fetch: (c, id) => c.listEmployeeSalaries(id),
+      format: (h, r) => h.formatSalaries(r.data ?? []),
+      notFound: 'Employee not found',
+      fallback: 'Failed to list salaries',
+    },
+    {
       path: '/api/v1/peopleforce/employees/:employeeId/skills',
       fetch: (c, id) => c.listEmployeeSkills(id),
       format: (h, r) => h.formatEmployeeSkills(r.data ?? []),
@@ -8072,6 +8238,46 @@ function registerRestApiRoutes(app: express.Express): void {
       }
     });
   }
+
+  // GET /api/v1/peopleforce/employees/:employeeId/holidays?page= - Holidays that apply to one employee
+  app.get('/api/v1/peopleforce/employees/:employeeId/holidays', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const helpers = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listEmployeeHolidays(req.params.employeeId as string, { page: qint(req.query.page, 1, { min: 1 }) });
+      respondNegotiated(req, res, result, () => helpers.formatHolidayList(result.data ?? [], result.metadata?.pagination));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce employee holidays:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to list employee holidays' });
+    }
+  });
+
+  // GET /api/v1/peopleforce/employees/:employeeId/absences?from=&to= - Leave plus public holidays in a date range
+  app.get('/api/v1/peopleforce/employees/:employeeId/absences', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const from = qstr(req.query.from);
+      const to = qstr(req.query.to);
+      const { isoDate } = await import('../util/isoDate.js');
+      const isDate = (v: string) => isoDate.safeParse(v).success;
+      if (!isDate(from) || !isDate(to) || from > to) {
+        res.status(400).json({ error: 'from and to are required as YYYY-MM-DD, with from not after to' });
+        return;
+      }
+      const helpers = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await helpers.collectEmployeeAbsences(client, {
+        employeeId: req.params.employeeId as string, from, to, includePending: qflag(req.query.includePending),
+      });
+      respondNegotiated(req, res, result, () => helpers.formatEmployeeAbsences(result));
+    } catch (err: any) {
+      console.error('Error reading PeopleForce absences:', err);
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to read absences' });
+    }
+  });
 
   // GET /api/v1/peopleforce/employees/:employeeId/tables/:tableInternalName
   // tableInternalName is a system slug from /employee-tables, not the display
@@ -8884,6 +9090,14 @@ function registerRestApiRoutes(app: express.Express): void {
       res.status(400).json({ error: (err as any).message });
       return;
     }
+    // Statuses our own ops set: 502 (Outline replaced the whole body on a
+    // passage edit, a storage upload failed) and 413 (storage refused the size).
+    // sendUpstreamError would flatten both to 500.
+    const own = (err as any)?.status;
+    if (own === 502 || own === 413) {
+      res.status(own).json({ error: (err as any).message });
+      return;
+    }
     console.error(`Outline REST call failed (${fallback}):`, err);
     sendUpstreamError(res, err, { notFound, fallback });
   }
@@ -9105,6 +9319,92 @@ function registerRestApiRoutes(app: express.Express): void {
       },
     },
     {
+      path: '/api/v1/outline/documents/:documentId/revisions',
+      notFound: 'Document not found',
+      fallback: 'Failed to list revisions',
+      run: (client, req) => client.listRevisions({
+        documentId: req.params.documentId as string,
+        limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/documents/:documentId/compare',
+      notFound: 'Document or revision not found',
+      fallback: 'Failed to compare revisions',
+      run: async (client, req) => {
+        const from = qstr(req.query.from);
+        if (!from) throw usrError('from query parameter (a revision ID) is required');
+        const { performCompareRevisions } = await import('../outline/restOps.js');
+        const r = await performCompareRevisions(client, req.params.documentId as string, from, qstr(req.query.to) || undefined);
+        return {
+          from: { id: r.from.id, createdAt: r.from.createdAt ?? null, createdBy: r.from.createdBy?.name ?? null },
+          to: r.to === 'current' ? 'current' : { id: r.to.id, createdAt: r.to.createdAt ?? null, createdBy: r.to.createdBy?.name ?? null },
+          added: r.diff.added,
+          removed: r.diff.removed,
+          summarized: r.diff.summarized,
+          diff: r.diff.text,
+        };
+      },
+    },
+    {
+      path: '/api/v1/outline/revisions/:revisionId',
+      notFound: 'Revision not found',
+      fallback: 'Failed to read revision',
+      run: async (client, req) => {
+        const r = await client.getRevision(req.params.revisionId as string);
+        if (!r) throw notFoundError('Revision not found.');
+        return r;
+      },
+    },
+    {
+      path: '/api/v1/outline/users',
+      notFound: 'User not found',
+      fallback: 'Failed to list users',
+      run: (client, req) => {
+        const filters = ['all', 'active', 'invited', 'suspended'] as const;
+        const raw = qstr(req.query.filter);
+        if (raw && !(filters as ReadonlyArray<string>).includes(raw)) throw usrError(`filter must be one of ${filters.join(', ')}`);
+        return client.listUsers({
+          query: qstr(req.query.q) || undefined,
+          filter: (raw || undefined) as (typeof filters)[number] | undefined,
+          limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+          offset: qint(req.query.offset, 0, { min: 0 }),
+        });
+      },
+    },
+    {
+      path: '/api/v1/outline/users/:userId',
+      notFound: 'User not found',
+      fallback: 'Failed to read user',
+      run: async (client, req) => {
+        const u = await client.getUser(req.params.userId as string);
+        if (!u) throw notFoundError('User not found.');
+        return u;
+      },
+    },
+    {
+      path: '/api/v1/outline/templates',
+      notFound: 'Template not found',
+      fallback: 'Failed to list templates',
+      run: (client, req) => client.listTemplates({
+        query: qstr(req.query.q) || undefined,
+        collectionId: qstr(req.query.collectionId) || undefined,
+        limit: qint(req.query.limit, 25, { min: 1, max: 100 }),
+        offset: qint(req.query.offset, 0, { min: 0 }),
+      }),
+    },
+    {
+      path: '/api/v1/outline/templates/:templateId',
+      notFound: 'Template not found',
+      fallback: 'Failed to read template',
+      run: async (client, req) => {
+        const t = await client.getTemplate(req.params.templateId as string);
+        if (!t) throw notFoundError('Template not found.');
+        return t;
+      },
+    },
+    {
       path: '/api/v1/outline/attachments/:attachmentId/url',
       notFound: 'Attachment not found',
       fallback: 'Failed to resolve attachment URL',
@@ -9187,6 +9487,49 @@ function registerRestApiRoutes(app: express.Express): void {
       run: (m, c, _a, p) => m.performDocumentLifecycle(c, 'restore', p.documentId),
     },
     {
+      path: '/api/v1/outline/documents/:documentId/unpublish',
+      notFound: 'Document not found',
+      fallback: 'Failed to unpublish document',
+      schema: (m) => m.unpublishDocumentRestSchema,
+      run: (m, c, a, p) => m.performUnpublishDocument(c, p.documentId, a),
+    },
+    {
+      // Static: must precede /documents/:documentId, which would take "import" as an id.
+      path: '/api/v1/outline/documents/import',
+      status: 201,
+      notFound: 'Collection or parent document not found',
+      fallback: 'Failed to import document',
+      schema: (m) => m.importHtmlDocumentRestSchema,
+      run: (m, c, a) => m.performImportHtmlDocument(c, a),
+    },
+    {
+      path: '/api/v1/outline/attachments',
+      status: 201,
+      notFound: 'Document not found',
+      fallback: 'Failed to upload attachment',
+      schema: (m) => m.uploadAttachmentRestSchema,
+      run: (m, c, a) => m.performUploadAttachment(c, a),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/update',
+      notFound: 'Comment not found',
+      fallback: 'Failed to update comment',
+      schema: (m) => m.updateCommentRestSchema,
+      run: (m, c, a, p) => m.performUpdateComment(c, p.commentId, a),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/resolve',
+      notFound: 'Comment not found',
+      fallback: 'Failed to resolve comment',
+      run: (m, c, _a, p) => m.performCommentResolution(c, 'resolve', p.commentId),
+    },
+    {
+      path: '/api/v1/outline/comments/:commentId/reopen',
+      notFound: 'Comment not found',
+      fallback: 'Failed to reopen comment',
+      run: (m, c, _a, p) => m.performCommentResolution(c, 'unresolve', p.commentId),
+    },
+    {
       path: '/api/v1/outline/documents/:documentId/comments',
       status: 201,
       notFound: 'Document not found',
@@ -9224,6 +9567,19 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to create collection',
       schema: (m) => m.createCollectionRestSchema,
       run: (m, c, a) => m.performCreateCollection(c, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/archive',
+      notFound: 'Collection not found',
+      fallback: 'Failed to archive collection',
+      schema: (m) => m.archiveCollectionRestSchema,
+      run: (m, c, a, p) => m.performCollectionLifecycle(c, 'archive', p.collectionId, a),
+    },
+    {
+      path: '/api/v1/outline/collections/:collectionId/restore',
+      notFound: 'Collection not found',
+      fallback: 'Failed to restore collection',
+      run: (m, c, _a, p) => m.performCollectionLifecycle(c, 'restore', p.collectionId),
     },
     {
       path: '/api/v1/outline/collections/:collectionId',
@@ -9697,12 +10053,84 @@ function registerRestApiRoutes(app: express.Express): void {
     try {
       const client = await hubspotRestClient(req, res);
       if (!client) return;
+      const objectType = qstr(req.query.objectType, 'deals');
+      if (objectType !== 'deals' && objectType !== 'tickets') {
+        res.status(400).json({ error: "objectType must be 'deals' or 'tickets'" });
+        return;
+      }
       const { formatPipelines } = await import('../hubspot/apiHelpers.js');
-      const result = await client.listDealPipelines();
-      respondNegotiated(req, res, result, () => formatPipelines(result.results ?? []));
+      const result = objectType === 'deals' ? await client.listDealPipelines() : await client.listPipelines(objectType);
+      respondNegotiated(req, res, result, () => formatPipelines(result.results ?? [], objectType === 'deals' ? 'deal' : 'ticket'));
     } catch (err: any) {
       console.error('Error listing HubSpot pipelines:', err);
       await sendHubSpotError(req, res, err, { notFound: 'Pipelines not found', fallback: 'Failed to list pipelines' });
+    }
+  });
+
+  // GET /api/v1/hubspot/tickets/search - Tickets by open/closed state, pipeline, stage, text, last change
+  app.get('/api/v1/hubspot/tickets/search', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      // A repeated ?pipelineId=0&pipelineId=1 arrives as an array, which qstr
+      // drops to '': the filter would vanish and tickets from every pipeline
+      // come back. Refused by name instead.
+      const nonScalar = ['state', 'pipelineId', 'stageId', 'q', 'modifiedAfter', 'limit', 'after']
+        .filter((k) => req.query[k] !== undefined && typeof req.query[k] !== 'string');
+      if (nonScalar.length) {
+        res.status(400).json({ error: `Query parameter(s) ${nonScalar.join(', ')} must be given exactly once, as a plain value.` });
+        return;
+      }
+      const { searchTicketsSchema, fetchTicketsSearch } = await import('../hubspot/server.js');
+      const parsed = searchTicketsSchema.safeParse({
+        state: qstr(req.query.state) || undefined,
+        pipelineId: qstr(req.query.pipelineId) || undefined,
+        stageId: qstr(req.query.stageId) || undefined,
+        query: qstr(req.query.q) || undefined,
+        modifiedAfter: qstr(req.query.modifiedAfter) || undefined,
+        limit: req.query.limit !== undefined ? qint(req.query.limit, 25, { min: 1, max: 100 }) : undefined,
+        after: qstr(req.query.after) || undefined,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid query', issues: parsed.error.flatten() });
+        return;
+      }
+      const { formatTickets } = await import('../hubspot/apiHelpers.js');
+      const result = await fetchTicketsSearch(client, parsed.data);
+      respondNegotiated(req, res, result, () => formatTickets(result.results ?? [], result.total, result.paging?.next?.after));
+    } catch (err: any) {
+      console.error('Error searching HubSpot tickets:', err);
+      if (err?.name === 'UserError' && typeof err?.code !== 'number') { res.status(400).json({ error: err.message }); return; }
+      const status = hubspotPassthroughStatus(err);
+      if (status) { res.status(status).json({ error: err.message || 'Failed to search tickets' }); return; }
+      await sendHubSpotError(req, res, err, { notFound: 'Tickets not found', fallback: 'Failed to search tickets' });
+    }
+  });
+
+  // GET /api/v1/hubspot/users and /teams - Account users and teams (settings.users.read / .teams.read)
+  app.get('/api/v1/hubspot/users', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatUsers } = await import('../hubspot/apiHelpers.js');
+      const result = await client.listUsers({ limit: qint(req.query.limit, 100, { min: 1, max: 100 }), after: qstr(req.query.after) || undefined });
+      respondNegotiated(req, res, result, () => formatUsers(result.results ?? [], result.paging?.next?.after));
+    } catch (err: any) {
+      console.error('Error listing HubSpot users:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Users not found', fallback: 'Failed to list users' });
+    }
+  });
+
+  app.get('/api/v1/hubspot/teams', requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await hubspotRestClient(req, res);
+      if (!client) return;
+      const { formatTeams } = await import('../hubspot/apiHelpers.js');
+      const result = await client.listTeams();
+      respondNegotiated(req, res, result, () => formatTeams(result.results ?? []));
+    } catch (err: any) {
+      console.error('Error listing HubSpot teams:', err);
+      await sendHubSpotError(req, res, err, { notFound: 'Teams not found', fallback: 'Failed to list teams' });
     }
   });
 
@@ -9884,9 +10312,9 @@ function registerRestApiRoutes(app: express.Express): void {
   // contract — and the honesty about a failed association — lives in one place.
   const HUBSPOT_ENGAGEMENT_ROUTES: ReadonlyArray<{
     path: string;
-    type: 'notes' | 'tasks' | 'calls' | 'meetings';
+    type: 'notes' | 'tasks' | 'calls' | 'meetings' | 'emails';
     label: string;
-    schemaName: 'createNoteSchema' | 'createTaskSchema' | 'logCallSchema' | 'logMeetingSchema';
+    schemaName: 'createNoteSchema' | 'createTaskSchema' | 'logCallSchema' | 'logMeetingSchema' | 'logEmailSchema';
     properties: (args: any, hubspot: typeof import('../hubspot/server.js')) => Record<string, unknown>;
     fallback: string;
   }> = [
@@ -9931,6 +10359,15 @@ function registerRestApiRoutes(app: express.Express): void {
         hs_meeting_end_time: a.endTime,
       }),
       fallback: 'Failed to log meeting',
+    },
+    {
+      // Records an email on the timeline; nothing is sent.
+      path: '/api/v1/hubspot/emails',
+      type: 'emails',
+      label: 'email',
+      schemaName: 'logEmailSchema',
+      properties: (a, hubspot) => hubspot.emailProperties(a),
+      fallback: 'Failed to log email',
     },
   ];
 
@@ -9983,6 +10420,8 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(result.status).json(result.body);
       } catch (err: any) {
         console.error(`Error in HubSpot ${route.tool}:`, err);
+        // Our own refusals (e.g. a deal stage without probability) are the caller's to fix.
+        if (err?.name === 'UserError' && typeof err?.code !== 'number') { res.status(400).json({ error: err.message }); return; }
         const status = hubspotPassthroughStatus(err);
         if (status) { res.status(status).json({ error: err.message || route.fallback }); return; }
         await sendHubSpotError(req, res, err, { notFound: route.notFound, fallback: route.fallback });

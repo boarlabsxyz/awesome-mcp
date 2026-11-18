@@ -142,6 +142,23 @@ export const uploadDriveFileSchema = z.object({
 
 export type UploadDriveFileArgs = z.infer<typeof uploadDriveFileSchema>;
 
+/**
+ * The Google MIME type to convert into, or undefined. Drive silently stores an
+ * unconvertible upload as the original type, so the conversion is checked
+ * against about.importFormats first rather than reported as done.
+ */
+async function checkedConversion(drive: Drive, sourceMimeType: string, convertTo?: keyof typeof CONVERT_TARGETS) {
+  if (!convertTo) return undefined;
+  const targetMimeType = CONVERT_TARGETS[convertTo];
+  const about = await drive.about.get({ fields: 'importFormats' });
+  const allowed = about.data.importFormats?.[sourceMimeType] ?? [];
+  if (!allowed.includes(targetMimeType)) {
+    throw new UserError(`Drive cannot convert ${sourceMimeType} into a Google ${convertTo}. `
+      + (allowed.length ? `It can convert it into: ${allowed.join(', ')}.` : 'It cannot convert that type at all; upload it without convertTo.'));
+  }
+  return targetMimeType;
+}
+
 export async function performUploadDriveFile(drive: Drive, args: UploadDriveFileArgs) {
   if ((args.contentBase64 === undefined) === (args.textContent === undefined)) {
     throw new UserError('Give exactly one of contentBase64 or textContent.');
@@ -159,18 +176,7 @@ export async function performUploadDriveFile(drive: Drive, args: UploadDriveFile
     throw new UserError(`The file is ${bytes.length} bytes; the limit here is ${MAX_UPLOAD_BYTES} (20 MB).`);
   }
 
-  let targetMimeType: string | undefined;
-  if (args.convertTo) {
-    targetMimeType = CONVERT_TARGETS[args.convertTo];
-    // Drive silently stores an unconvertible upload as the original type, so
-    // the conversion is checked first rather than reported as done.
-    const about = await drive.about.get({ fields: 'importFormats' });
-    const allowed = about.data.importFormats?.[args.sourceMimeType] ?? [];
-    if (!allowed.includes(targetMimeType)) {
-      throw new UserError(`Drive cannot convert ${args.sourceMimeType} into a Google ${args.convertTo}. `
-        + (allowed.length ? `It can convert it into: ${allowed.join(', ')}.` : 'It cannot convert that type at all; upload it without convertTo.'));
-    }
-  }
+  const targetMimeType = await checkedConversion(drive, args.sourceMimeType, args.convertTo);
 
   const response = await drive.files.create({
     requestBody: {
@@ -188,6 +194,62 @@ export async function performUploadDriveFile(drive: Drive, args: UploadDriveFile
     file,
     bytes: bytes.length,
     converted: Boolean(targetMimeType) && file.mimeType === targetMimeType,
+  };
+}
+
+// === Resumable upload session (large files) ===
+
+export const createDriveUploadSessionSchema = z.object({
+  fileName: uploadDriveFileSchema.shape.fileName,
+  sourceMimeType: uploadDriveFileSchema.shape.sourceMimeType,
+  sizeBytes: z.number().int().positive().optional()
+    .describe('File size in bytes, if known. Drive then rejects an upload of a different size.'),
+  parentFolderId: uploadDriveFileSchema.shape.parentFolderId,
+  convertTo: uploadDriveFileSchema.shape.convertTo,
+});
+
+export type CreateDriveUploadSessionArgs = z.infer<typeof createDriveUploadSessionSchema>;
+
+const RESUMABLE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true'
+  + '&fields=id,name,mimeType,size,webViewLink,parents,driveId';
+
+/**
+ * Opens a Drive resumable upload and returns its session URL, so a file too big
+ * to pass inline (20 MB here, ~3.7 MB over REST) goes from the caller straight
+ * to Google with a PUT. The URL is the only credential that upload needs, so it
+ * is a short-lived secret: returned to the caller, never logged. Google keeps a
+ * session for about a week; nothing exists in Drive until the bytes arrive.
+ */
+export async function performCreateDriveUploadSession(drive: Drive, args: CreateDriveUploadSessionArgs) {
+  const targetMimeType = await checkedConversion(drive, args.sourceMimeType, args.convertTo);
+  // The client's OAuth2Client signs the request, so no token is copied out.
+  const auth = (drive as any).context?._options?.auth;
+  if (typeof auth?.request !== 'function') throw new Error('Drive client has no authorized transport.');
+  const response = await auth.request({
+    url: RESUMABLE_UPLOAD_URL,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': args.sourceMimeType,
+      ...(args.sizeBytes ? { 'X-Upload-Content-Length': String(args.sizeBytes) } : {}),
+    },
+    data: {
+      name: args.fileName,
+      ...(targetMimeType ? { mimeType: targetMimeType } : {}),
+      ...(args.parentFolderId ? { parents: [args.parentFolderId] } : {}),
+    },
+  });
+  const headers = response?.headers;
+  const uploadUrl: unknown = typeof headers?.get === 'function' ? headers.get('location') : headers?.location;
+  if (typeof uploadUrl !== 'string' || !uploadUrl.startsWith('https://')) {
+    throw new Error('Drive opened no upload session (no Location header).');
+  }
+  return {
+    uploadUrl,
+    method: 'PUT' as const,
+    contentType: args.sourceMimeType,
+    convertTo: args.convertTo ?? null,
+    curl: `curl -X PUT -H 'Content-Type: ${args.sourceMimeType}' --upload-file <path-to-file> '<uploadUrl>'`,
   };
 }
 

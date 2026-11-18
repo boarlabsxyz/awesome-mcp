@@ -58,7 +58,7 @@ export interface SupabaseToolDef {
   /** The upstream tool name — also the name this server registers. */
   name: string;
   /** Upstream feature group (Supabase's `features` URL option names these). */
-  group: 'docs' | 'account' | 'database' | 'debugging' | 'development' | 'functions' | 'branching';
+  group: 'docs' | 'account' | 'database' | 'debugging' | 'development' | 'functions' | 'branching' | 'storage' | 'notebooks' | 'feedback';
   description: string;
   parameters: z.ZodObject<z.ZodRawShape>;
   annotations: SupabaseToolAnnotations;

@@ -3985,6 +3985,197 @@
         }
       }
     },
+    "/api/v1/clickup/workspaces/{workspaceId}/attachments": {
+      "get": {
+        "operationId": "downloadClickUpAttachment",
+        "summary": "Download a file ClickUp hosts as an attachment (a recording or image linked from a doc or task)",
+        "description": "Streams the bytes of a file on ClickUp's attachments CDN, fetched with the connection's token, and forwards a bytes Range header (206, or 416 with Content-Range). These URLs are not public, so a plain request gets the ClickUp sign-in page; this route refuses that page and the sign-in redirect with 403 instead of saving them as the file. Mirrors the MCP tool getAttachmentInfo, which reports the name, type and size without downloading. Whether ClickUp accepts the OAuth token on its attachments host is UNVERIFIED live.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID: the digits after \"t\" in the attachment host."
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The attachment URL exactly as it appears in the doc or task: https://t{workspaceId}.p.clickup-attachments.com/t{workspaceId}/... Any other host is refused, because this server fetches it with the connection's token."
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A bytes range to fetch (bytes=start-end, several comma-separated), e.g. to resume a download. Any other unit is 400."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file, with the Content-Type ClickUp serves it with (application/octet-stream when it sends none).",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Content-Disposition": {
+                "description": "attachment, with the file name from the URL's filename parameter or its last path segment.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range of the file, with the Content-Type ClickUp serves it with.",
+            "headers": {
+              "Content-Length": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "Content-Disposition": {
+                "description": "attachment, with the file name from the URL's filename parameter or its last path segment.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "description": "bytes start-end/total",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "url missing, not this workspace's attachments host, or the Range header is not a bytes range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ClickUp did not accept the connection's token for this file, or denied access to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workspace not visible to this ClickUp connection, or the attachment does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Requested range not satisfiable",
+            "headers": {
+              "Content-Range": {
+                "description": "bytes */total, when ClickUp sends it",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "ClickUp rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "ClickUp's attachments host failed, or redirected outside it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "ClickUp's attachments host did not answer within 30s",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clickup/spaces/{spaceId}/tags": {
       "get": {
         "operationId": "listClickUpSpaceTags",
@@ -16533,7 +16724,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response (total, results, paging), or the rendered list when text was requested."
+            "description": "A HubSpot CRM search response (total, results, paging), or the rendered list when text was requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -16702,7 +16906,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot company object, or its rendering when text was requested."
+            "description": "The raw HubSpot company object, or its rendering when text was requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17059,7 +17276,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17228,7 +17458,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot contact object, or its rendering."
+            "description": "The raw HubSpot contact object, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17392,7 +17635,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17551,7 +17807,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot deal object, or its rendering."
+            "description": "The raw HubSpot deal object, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17681,12 +17950,25 @@
     "/api/v1/hubspot/pipelines": {
       "get": {
         "operationId": "listHubSpotPipelines",
-        "summary": "List HubSpot deal pipelines with their ordered stages",
+        "summary": "List HubSpot deal or ticket pipelines with their ordered stages",
         "description": "One call returns every pipeline with its stages, which is how a dealstage ID on a deal record becomes a stage name. Mirrors the MCP tool `listPipelines`.",
         "tags": [
           "hubspot"
         ],
         "parameters": [
+          {
+            "name": "objectType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ],
+              "default": "deals"
+            },
+            "description": "deals (default) or tickets. Ticket stages carry their open/closed state."
+          },
           {
             "name": "format",
             "in": "query",
@@ -17704,7 +17986,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw pipelines page, or its rendering."
+            "description": "The raw pipelines page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelinesPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17738,6 +18033,681 @@
           },
           "404": {
             "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}": {
+      "post": {
+        "operationId": "createHubSpotPipeline",
+        "summary": "Create a HubSpot deal or ticket pipeline with its stages",
+        "description": "Changes the portal for everyone in it. Deal stages need probability, ticket stages ticketState (400 otherwise). Free accounts cannot add pipelines. Archiving or replacing a pipeline is not exposed. Mirrors the MCP tool `createPipeline`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createPipelineSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePipelineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created pipeline with its stages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object type not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/update": {
+      "post": {
+        "operationId": "updateHubSpotPipeline",
+        "summary": "Rename or reorder a HubSpot pipeline",
+        "description": "Changes the portal for everyone in it, with no confirmation step (the permanent dashboard key can call it), like the property-schema writes. Partial update (PATCH): stages are untouched. Mirrors the MCP tool `updatePipeline`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pipeline ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updatePipelineSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePipelineRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated pipeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages": {
+      "post": {
+        "operationId": "createHubSpotPipelineStage",
+        "summary": "Add a stage to a HubSpot pipeline",
+        "description": "Changes the portal for everyone in it, with no confirmation step, like the property-schema writes. Answers 201. Deal stages need probability, ticket stages ticketState; displayOrder omitted appends the stage after the last one (HubSpot requires a position). Mirrors the MCP tool `createPipelineStage`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pipeline ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createPipelineStageSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePipelineStageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created stage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineStage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/pipelines/{objectType}/{pipelineId}/stages/{stageId}/update": {
+      "post": {
+        "operationId": "updateHubSpotPipelineStage",
+        "summary": "Edit a HubSpot pipeline stage",
+        "description": "Changes the portal for everyone in it, with no confirmation step: a new probability changes deal forecasts, a ticketState flip changes which tickets count as open. Label, order, probability (deals) or ticketState (tickets). Deleting a stage is not exposed. Mirrors the MCP tool `updatePipelineStage`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "objectType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deals",
+                "tickets"
+              ]
+            },
+            "description": "deals or tickets."
+          },
+          {
+            "name": "pipelineId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Pipeline ID."
+          },
+          {
+            "name": "stageId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stage ID."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updatePipelineStageSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePipelineStageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated stage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineStage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stage not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/users": {
+      "get": {
+        "operationId": "listHubSpotUsers",
+        "summary": "List HubSpot account users",
+        "description": "Needs settings.users.read: existing connections reconnect. limit, after. Mirrors the MCP tool `listUsers`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            },
+            "description": "Max users per page (default 100, max 100)."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Paging token from a previous call (paging.next.after)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw users page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Users not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/teams": {
+      "get": {
+        "operationId": "listHubSpotTeams",
+        "summary": "List HubSpot teams",
+        "description": "Needs settings.users.teams.read: existing connections reconnect. Mirrors the MCP tool `listTeams`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw teams page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamsPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Teams not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
             "content": {
               "application/json": {
                 "schema": {
@@ -17918,7 +18888,20 @@
         ],
         "responses": {
           "200": {
-            "description": "A HubSpot CRM search response, or the rendered list."
+            "description": "A HubSpot CRM search response, or the rendered list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -17952,6 +18935,361 @@
           },
           "404": {
             "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createHubSpotTicket",
+        "summary": "Create a HubSpot ticket",
+        "description": "Answers 201. pipelineStage is required by HubSpot; pipeline defaults to 0. Not idempotent. Mirrors the MCP tool `createTicket`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with createTicketSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTicketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created ticket.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline or stage not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets/search": {
+      "get": {
+        "operationId": "searchHubSpotTickets",
+        "summary": "Search HubSpot tickets by state, pipeline, stage, text and last change",
+        "description": "state=open (default), closed or any - read from each stage open/closed state in its pipeline. pipelineId, stageId, q, modifiedAfter (ISO), limit (max 100), after. Each filter must be given once: a repeated one is refused with 400 rather than dropped. Mirrors the MCP tool `searchTickets`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "closed",
+                "any"
+              ],
+              "default": "open"
+            },
+            "description": "open/closed by the stage's ticket state in its pipeline; any = no state filter."
+          },
+          {
+            "name": "pipelineId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only this ticket pipeline."
+          },
+          {
+            "name": "stageId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only this stage (overrides state)."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Free-text search."
+          },
+          {
+            "name": "modifiedAfter",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Only tickets changed after this time (ISO-8601)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": "Max tickets per page (default 25, max 100)."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Paging token from a previous call (paging.next.after)."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "plain",
+                "markdown"
+              ]
+            },
+            "description": "Response shape. Defaults to raw upstream JSON; text/plain/markdown render the same output the MCP tool returns. Accept: text/plain does the same thing."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The raw search page, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrmSearchPage"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tickets not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/tickets/{ticketId}/update": {
+      "post": {
+        "operationId": "updateHubSpotTicket",
+        "summary": "Update a HubSpot ticket",
+        "description": "Only the named properties change (hs_pipeline_stage moves it). 200 with the ticket re-read. Mirrors the MCP tool `updateTicket`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot ticket ID to update."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updateTicketSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTicketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ticket re-read after the update, and what each sent property read back as.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateTicketResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ticket not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
             "content": {
               "application/json": {
                 "schema": {
@@ -18099,7 +19437,20 @@
         ],
         "responses": {
           "200": {
-            "description": "The raw HubSpot property definition, or its rendering."
+            "description": "The raw HubSpot property definition, or its rendering.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyDefinition"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same text the MCP tool returns (?format=text or Accept: text/plain)."
+                }
+              }
+            }
           },
           "400": {
             "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
@@ -18454,6 +19805,89 @@
         }
       }
     },
+    "/api/v1/hubspot/emails": {
+      "post": {
+        "operationId": "logHubSpotEmail",
+        "summary": "Log an email on the HubSpot timeline and optionally attach it to a record",
+        "description": "Records an email; sends nothing. Body limit 5mb. direction defaults to EMAIL. Same association reporting as notes; tickets are a valid target. Mirrors the MCP tool `logEmail`.",
+        "tags": [
+          "hubspot"
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with logEmailSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The email was recorded. This is 201 even when the association failed, because the record does exist — check association.attached before reporting it as on the timeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hubspot/tasks": {
       "post": {
         "operationId": "createHubSpotTask",
@@ -18611,6 +20045,126 @@
         }
       }
     },
+    "/api/v1/hubspot/engagements/{engagementType}/{engagementId}/update": {
+      "post": {
+        "operationId": "updateHubSpotEngagement",
+        "summary": "Edit a HubSpot note, task, call, meeting or logged email",
+        "description": "Only the named properties change. Body limit 5mb. Each is re-read: confirmed maps every property to true, false (reads back differently) or null (not returned). Mirrors the MCP tool `updateEngagement`.",
+        "tags": [
+          "hubspot"
+        ],
+        "parameters": [
+          {
+            "name": "engagementType",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "notes",
+                "tasks",
+                "calls",
+                "meetings",
+                "emails"
+              ]
+            },
+            "description": "Type of the activity."
+          },
+          {
+            "name": "engagementId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "HubSpot ID of the activity."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Validated with updateEngagementSchema from src/hubspot/server.ts.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEngagementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The engagement as re-read, and what each sent property read back as.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateEngagementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request or query parameters failed validation. `issues` carries the flattened Zod field errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No connection for this service on the account, or the provider denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Engagement not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HubSpot refused the write as a conflict (for example a duplicate label).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "HubSpot rate limit; retry later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hubspot/engagements/{engagementType}/{engagementId}/delete": {
       "post": {
         "operationId": "deleteHubSpotEngagement",
@@ -18625,9 +20179,15 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "notes",
+                "tasks",
+                "calls",
+                "meetings"
+              ]
             },
-            "description": "Type of engagement to delete (plural, matching the tool that created it)."
+            "description": "Type of engagement to delete (plural, matching the tool that created it). Logged emails are deletable over MCP only."
           },
           {
             "name": "engagementId",
@@ -19259,6 +20819,19 @@
                   "icon": {
                     "type": "string",
                     "description": "Emoji icon."
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+                    "description": "Icon colour, hex like #FF0000."
+                  },
+                  "fullWidth": {
+                    "type": "boolean",
+                    "description": "Display the document full width."
+                  },
+                  "templateId": {
+                    "type": "string",
+                    "description": "Start from this template (from listTemplates). Its content is used when text is empty."
                   }
                 }
               }
@@ -19400,7 +20973,7 @@
       "post": {
         "operationId": "updateOutlineDocument",
         "summary": "Update an Outline document",
-        "description": "REPLACES title and text unless append is true. append is ignored unless text is supplied. An empty-string icon CLEARS the icon; omitting it leaves it alone.",
+        "description": "REPLACES title and text unless append is true. append is ignored unless text is supplied. An empty-string icon CLEARS the icon; omitting it leaves it alone. With findText, only the first exact occurrence of that markdown is replaced by text (400 if absent, checked before writing); an Outline too old for passage edits is detected, the original text written back, and the call answers 502.",
         "parameters": [
           {
             "name": "documentId",
@@ -19438,6 +21011,27 @@
                   "icon": {
                     "type": "string",
                     "description": "Emoji icon. An empty string clears it."
+                  },
+                  "findText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Edit one passage: replace the first exact occurrence of this markdown with text, keeping the rest of the document and its formatting untouched. Needs a recent Outline."
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+                    "description": "Icon colour, hex like #FF0000."
+                  },
+                  "fullWidth": {
+                    "type": "boolean",
+                    "description": "Display the document full width (true) or normal width (false)."
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ],
+                    "description": "Publish a draft. To return a published document to draft, use unpublishDocument."
                   }
                 }
               }
@@ -19789,6 +21383,19 @@
                   "parentCommentId": {
                     "type": "string",
                     "description": "Reply to this comment instead of starting a thread."
+                  },
+                  "anchorText": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Make it an inline comment on this exact text in the document (first occurrence unless anchorPrefix/anchorSuffix narrow it). Needs a recent Outline."
+                  },
+                  "anchorPrefix": {
+                    "type": "string",
+                    "description": "Text just before anchorText, to pick the right occurrence."
+                  },
+                  "anchorSuffix": {
+                    "type": "string",
+                    "description": "Text just after anchorText, to pick the right occurrence."
                   }
                 }
               }
@@ -20412,6 +22019,10 @@
                     "type": "string",
                     "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
                     "description": "Hex colour like #RRGGBB or #RGB."
+                  },
+                  "icon": {
+                    "type": "string",
+                    "description": "Optional icon: an emoji, or an Outline icon name."
                   }
                 }
               }
@@ -20519,6 +22130,11 @@
                     "nullable": true,
                     "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
                     "description": "New hex color. Pass null to clear it."
+                  },
+                  "icon": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "New icon (emoji or Outline icon name). Pass null to clear it."
                   }
                 }
               }
@@ -20972,6 +22588,1435 @@
                       "type": "string"
                     },
                     "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/unpublish": {
+      "post": {
+        "operationId": "unpublishOutlineDocument",
+        "summary": "Return a published Outline document to draft",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "detach": {
+                    "type": "boolean",
+                    "description": "Also take it out of its collection (default: stays in place as a draft)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Document, now a draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/import": {
+      "post": {
+        "operationId": "importOutlineHtmlDocument",
+        "summary": "Create an Outline document from HTML",
+        "description": "Runs the Outline importer: remote and base64 images in the HTML are copied in as attachments. Not idempotent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "html": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The HTML to import. Remote and base64 images in it are copied into Outline as attachments."
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "File name used for the import; Outline takes the title from the HTML <title> or first heading, else this."
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "Collection to import into. Give this or parentDocumentId."
+                  },
+                  "parentDocumentId": {
+                    "type": "string",
+                    "description": "Import as a child of this document. Give this or collectionId."
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Publish immediately (default true) or leave a draft."
+                  }
+                },
+                "required": [
+                  "html"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/attachments": {
+      "post": {
+        "operationId": "uploadOutlineAttachment",
+        "summary": "Upload a file to Outline as an attachment",
+        "description": "Creates the attachment record and sends the bytes. Not inserted into any document: put the returned markdown in with the update route.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "File name, e.g. \"diagram.png\"."
+                  },
+                  "contentType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MIME type, e.g. \"image/png\", \"application/pdf\"."
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The file bytes, base64-encoded. Give this or textContent."
+                  },
+                  "textContent": {
+                    "type": "string",
+                    "description": "The file as UTF-8 text. Give this or contentBase64."
+                  },
+                  "documentId": {
+                    "type": "string",
+                    "description": "Document the attachment belongs to (needs edit access to it). It is not inserted: put the returned markdown into the document with updateDocument."
+                  }
+                },
+                "required": [
+                  "fileName",
+                  "contentType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attachmentId": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "markdown": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/collections/{collectionId}/archive": {
+      "post": {
+        "operationId": "archiveOutlineCollection",
+        "summary": "Archive an Outline collection and the documents in it",
+        "description": "Hides the collection and its documents from the sidebar and search; deletes nothing. Reversible via the restore route.",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline collection ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Optional reason, shown on the archived collection."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Collection archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/collections/{collectionId}/restore": {
+      "post": {
+        "operationId": "restoreOutlineCollection",
+        "summary": "Restore an archived Outline collection",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline collection ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Collection restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/update": {
+      "post": {
+        "operationId": "updateOutlineComment",
+        "summary": "Edit the text of an Outline comment",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New comment text (markdown). Replaces the old text. Only the author (or an admin) can edit."
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comment updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutlineComment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/resolve": {
+      "post": {
+        "operationId": "resolveOutlineComment",
+        "summary": "Resolve an Outline comment thread",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "comment": {
+                      "$ref": "#/components/schemas/OutlineComment"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true,
+                      "description": "From the returned resolvedAt; null when Outline omits it."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/comments/{commentId}/reopen": {
+      "post": {
+        "operationId": "reopenOutlineComment",
+        "summary": "Reopen a resolved Outline comment thread",
+        "parameters": [
+          {
+            "name": "commentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline comment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "comment": {
+                      "$ref": "#/components/schemas/OutlineComment"
+                    },
+                    "confirmed": {
+                      "type": "boolean",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Outline accepted the request but returned no record, or a passage edit was not supported (see description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/users": {
+      "get": {
+        "operationId": "listOutlineUsers",
+        "summary": "List or search Outline workspace users",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search by name or email"
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "active",
+                "invited",
+                "suspended"
+              ]
+            },
+            "description": "Status filter"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/users/{userId}": {
+      "get": {
+        "operationId": "getOutlineUser",
+        "summary": "Read an Outline user profile",
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline user ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/templates": {
+      "get": {
+        "operationId": "listOutlineTemplates",
+        "summary": "List Outline templates",
+        "description": "Needs an Outline with the templates API (404 on older servers).",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by title"
+          },
+          {
+            "name": "collectionId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only templates of this collection"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/templates/{templateId}": {
+      "get": {
+        "operationId": "getOutlineTemplate",
+        "summary": "Read an Outline template",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline template ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/revisions": {
+      "get": {
+        "operationId": "listOutlineDocumentRevisions",
+        "summary": "List the saved versions of an Outline document",
+        "description": "Newest first, without bodies.",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Max results (1-100)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            },
+            "description": "Skip N results"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "pagination": {
+                      "$ref": "#/components/schemas/Pagination"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/revisions/{revisionId}": {
+      "get": {
+        "operationId": "getOutlineRevision",
+        "summary": "Read one saved version of an Outline document",
+        "parameters": [
+          {
+            "name": "revisionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The revision ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Outline connection for this account, or permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outline/documents/{documentId}/compare": {
+      "get": {
+        "operationId": "compareOutlineDocumentRevisions",
+        "summary": "Diff two versions of an Outline document",
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Outline document ID"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The older revision ID"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The newer revision ID; omit for the current document"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Line diff",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "to": {},
+                    "added": {
+                      "type": "integer"
+                    },
+                    "removed": {
+                      "type": "integer"
+                    },
+                    "summarized": {
+                      "type": "boolean"
+                    },
+                    "diff": {
                       "type": "string"
                     }
                   }
@@ -25162,6 +28207,505 @@
                   }
                 },
                 "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/salaries": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeSalaries",
+        "summary": "List an employee salary history",
+        "description": "v3. Amount, currency, pay period, effective date and compensation component. Needs a Company API key allowed to view compensation; otherwise 403.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/holidays": {
+      "get": {
+        "operationId": "listPeopleForceHolidays",
+        "summary": "List company public holidays",
+        "description": "v3. working: true marks a working-day exception, not a day off; observed_on and compensated_on say when the day off is actually taken.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/holiday-policies": {
+      "get": {
+        "operationId": "listPeopleForceHolidayPolicies",
+        "summary": "List holiday policies",
+        "description": "List holiday policies",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/holidays": {
+      "get": {
+        "operationId": "listPeopleForceEmployeeHolidays",
+        "summary": "List the public holidays that apply to one employee",
+        "description": "v3, from the employee location holiday policy. Paginated.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number (1-based). Page size is fixed by PeopleForce.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/peopleforce/employees/{employeeId}/absences": {
+      "get": {
+        "operationId": "getPeopleForceEmployeeAbsences",
+        "summary": "Leave and public holidays for one employee between two dates",
+        "description": "Approved leave (plus pending with includePending=true) and the public holidays of the employee holiday policy, filtered for overlap with from..to. truncated names any source that stopped after 10 pages.",
+        "tags": [
+          "PeopleForce"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "description": "The PeopleForce employee ID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First day, YYYY-MM-DD.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last day, YYYY-MM-DD.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "includePending",
+            "in": "query",
+            "required": false,
+            "description": "Also list leave requests awaiting approval.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "Set to text/plain/markdown to receive the same markdown the MCP tool renders instead of JSON. Accept: text/plain works too.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "plain",
+                "markdown"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "employeeId": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "leave": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "holidays": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "truncated": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "description": "The same markdown the MCP tool renders. Returned when format=text."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "from and to missing, not YYYY-MM-DD, or from after to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
               }
             }
           }
@@ -33440,6 +36984,33 @@
         }
       }
     },
+    "/api/v1/drive/upload-sessions": {
+      "post": {
+        "operationId": "createDriveUploadSession",
+        "summary": "Open a resumable upload for a large file; returns the URL to PUT it to",
+        "description": "Open a resumable upload for a large file; returns the URL to PUT it to. Mirrors the MCP tool `createDriveUploadSession`. Takes a JSON body and returns JSON. Answers 201 with uploadUrl. PUT the bytes there (no bearer needed; no size limit of ours), and the PUT response is the new file. The URL alone authorizes that one upload for about a week, so keep it private. convertTo is checked against what Drive can import. Not destructive: nothing exists until the bytes arrive, and the permanent dashboard key can already upload through POST /api/v1/drive/files, so it is accepted here too.",
+        "tags": [
+          "drive"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
     "/api/v1/drive/files/{fileId}/permissions": {
       "get": {
         "operationId": "getFilePermissions",
@@ -34396,7 +37967,7 @@
       "post": {
         "operationId": "scheduleSlackMessage",
         "summary": "Schedule a message for later delivery",
-        "description": "Schedule a message for later delivery. Mirrors the MCP tool `scheduleMessage`. Takes a JSON body and returns JSON. Answers 201 with scheduledMessageId. postAt must be in the future and within 120 days. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "description": "Schedule a message for later delivery. Mirrors the MCP tool `scheduleMessage`. Takes a JSON body and returns JSON. Answers 201 with scheduledMessageId. threadTs schedules a thread reply. postAt must be in the future and within 120 days. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
         "tags": [
           "slack"
         ],
@@ -34527,6 +38098,43 @@
         "description": "Create a Slack List. Mirrors the MCP tool `createList`. Takes a JSON body and returns JSON. Answers 201. Paid workspaces only; needs lists:write. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
         "tags": [
           "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/lists/{listId}/update": {
+      "post": {
+        "operationId": "updateSlackList",
+        "summary": "Rename a Slack List, replace its description or switch todo mode",
+        "description": "Rename a Slack List, replace its description or switch todo mode. Mirrors the MCP tool `updateList`. Takes a JSON body and returns JSON. Pass at least one of name, description, todoMode (400 otherwise). confirmed is true only when the name alone changed and reads back; description and todo mode are not read back (null). Paid workspaces only. 503 unless SLACK_WRITES_ENABLED is set. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), on the same condition as posting.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "listId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "400": {
@@ -35831,7 +39439,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
           },
@@ -35880,7 +39489,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
           },
@@ -35939,7 +39549,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach the activity to. Must be given together with associateToObjectId."
           },
@@ -36170,7 +39781,8 @@
             "enum": [
               "companies",
               "contacts",
-              "deals"
+              "deals",
+              "tickets"
             ],
             "description": "Record type to attach this activity to (companies, contacts, or deals), so it shows on that timeline."
           },
@@ -36328,6 +39940,524 @@
           "description": {
             "type": "string",
             "description": "Optional new description."
+          }
+        }
+      },
+      "LogEmailRequest": {
+        "type": "object",
+        "description": "Records an email on the timeline; nothing is sent. associateToObjectType and associateToObjectId go together or not at all.",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "Email subject (hs_email_subject)."
+          },
+          "text": {
+            "type": "string",
+            "description": "Email body as plain text (hs_email_text)."
+          },
+          "html": {
+            "type": "string",
+            "description": "Email body as HTML (hs_email_html)."
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "EMAIL",
+              "INCOMING_EMAIL",
+              "FORWARDED_EMAIL"
+            ],
+            "default": "EMAIL",
+            "description": "EMAIL = sent by your team, INCOMING_EMAIL = a reply received, FORWARDED_EMAIL (hs_email_direction)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "BOUNCED",
+              "FAILED",
+              "SCHEDULED",
+              "SENDING",
+              "SENT"
+            ],
+            "description": "Send status to record (hs_email_status)."
+          },
+          "hs_timestamp": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "description": "Activity time as ISO-8601 or epoch milliseconds. Defaults to now."
+          },
+          "associateToObjectType": {
+            "type": "string",
+            "enum": [
+              "companies",
+              "contacts",
+              "deals",
+              "tickets"
+            ],
+            "description": "Record type to attach the email to. Must be given together with associateToObjectId."
+          },
+          "associateToObjectId": {
+            "type": "string",
+            "description": "ID of the record to attach the email to. Must be given together with associateToObjectType."
+          }
+        }
+      },
+      "UpdateEngagementRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "minProperties": 1,
+            "description": "Properties to set (at least one), e.g. hs_note_body, hs_task_status, hs_call_body."
+          }
+        }
+      },
+      "UpdateEngagementResult": {
+        "type": "object",
+        "required": [
+          "engagement",
+          "confirmed"
+        ],
+        "properties": {
+          "engagement": {
+            "$ref": "#/components/schemas/CrmObject"
+          },
+          "confirmed": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean",
+              "nullable": true
+            },
+            "description": "Each sent property: true = reads back as sent, false = reads back differently, null = could not confirm (not returned, or the re-read failed)."
+          }
+        }
+      },
+      "CreateTicketRequest": {
+        "type": "object",
+        "required": [
+          "subject",
+          "pipelineStage"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Ticket name (subject)."
+          },
+          "content": {
+            "type": "string",
+            "description": "Ticket description (content)."
+          },
+          "pipeline": {
+            "type": "string",
+            "default": "0",
+            "description": "Ticket pipeline ID (from listPipelines objectType tickets). Default \"0\", the default support pipeline."
+          },
+          "pipelineStage": {
+            "type": "string",
+            "description": "Stage ID within that pipeline (hs_pipeline_stage) — HubSpot requires one."
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH",
+              "URGENT"
+            ],
+            "description": "hs_ticket_priority."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Any other ticket properties."
+          }
+        }
+      },
+      "UpdateTicketRequest": {
+        "type": "object",
+        "required": [
+          "properties"
+        ],
+        "properties": {
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "minProperties": 1,
+            "description": "Properties to set (at least one), e.g. subject, content, hs_pipeline_stage to move it, hs_ticket_priority."
+          }
+        }
+      },
+      "PipelineStageInput": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stage name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position in the pipeline (0 first)."
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Deal stages: win probability 0.0–1.0 (1 = closed won, 0 = closed lost). Required for deals; refused for tickets."
+          },
+          "ticketState": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ],
+            "description": "Ticket stages: OPEN or CLOSED. Required for tickets; refused for deals."
+          }
+        }
+      },
+      "CreatePipelineRequest": {
+        "type": "object",
+        "required": [
+          "label",
+          "stages"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Pipeline name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position among pipelines. Defaults to 0."
+          },
+          "stages": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/PipelineStageInput"
+            },
+            "description": "The stages, in order (displayOrder defaults to the array index). HubSpot requires at least one."
+          }
+        }
+      },
+      "UpdatePipelineRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "At least one of label or displayOrder.",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "New name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "New position among pipelines."
+          }
+        }
+      },
+      "CreatePipelineStageRequest": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stage name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position in the pipeline (0 first). Omitted: after the last stage."
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Deal stages: win probability 0.0–1.0 (1 = closed won, 0 = closed lost). Required for deals; refused for tickets."
+          },
+          "ticketState": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ],
+            "description": "Ticket stages: OPEN or CLOSED. Required for tickets; refused for deals."
+          }
+        }
+      },
+      "UpdatePipelineStageRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "description": "At least one of label, displayOrder, probability, ticketState.",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stage name."
+          },
+          "displayOrder": {
+            "type": "integer",
+            "description": "Position in the pipeline (0 first)."
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Deal stages: win probability 0.0–1.0 (1 = closed won, 0 = closed lost). Required for deals; refused for tickets."
+          },
+          "ticketState": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED"
+            ],
+            "description": "Ticket stages: OPEN or CLOSED. Required for tickets; refused for deals."
+          }
+        }
+      },
+      "PipelineStage": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot pipeline stage. metadata carries probability (deals) or ticketState (tickets).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "displayOrder": {
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Pipeline": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot pipeline with its stages.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "displayOrder": {
+            "type": "integer"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineStage"
+            }
+          }
+        }
+      },
+      "CrmSearchPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot CRM search response.",
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CrmObject"
+            }
+          },
+          "paging": {
+            "type": "object",
+            "description": "Present when there is a next page; pass paging.next.after as ?after.",
+            "properties": {
+              "next": {
+                "type": "object",
+                "properties": {
+                  "after": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "PipelinesPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pipeline"
+            }
+          }
+        }
+      },
+      "HubSpotUser": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "roleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "primaryTeamId": {
+            "type": "string"
+          },
+          "secondaryTeamIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "superAdmin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UsersPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubSpotUser"
+            }
+          },
+          "paging": {
+            "type": "object",
+            "description": "Present when there is a next page; pass paging.next.after as ?after.",
+            "properties": {
+              "next": {
+                "type": "object",
+                "properties": {
+                  "after": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "HubSpotTeam": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "secondaryUserIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TeamsPage": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubSpotTeam"
+            }
+          }
+        }
+      },
+      "PropertyDefinition": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A raw HubSpot property definition.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "fieldType": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "UpdateTicketResult": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "confirmed"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/CrmObject"
+          },
+          "confirmed": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean",
+              "nullable": true
+            },
+            "description": "Each sent property: true = reads back as sent, false = reads back differently, null = could not confirm (not returned, or the re-read failed after the update succeeded; ticket then carries only id)."
           }
         }
       },

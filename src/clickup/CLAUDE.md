@@ -11,6 +11,14 @@
 - **Doc images are self-hosted** — no Doc image-upload API (SPA `/v1/attachment` needs a browser JWT). `insertImageIntoPage`/`uploadClickUpDocImage` fetch a public URL (SSRF-guarded per redirect hop in `fetchImageBytes`, 20 MB cap), store in Postgres (`clickup_doc_images`, `docImageStore.ts`), embed `![](BASE_URL/images/clickup-doc/<id>)` via `editPage`. Serve route `registerClickUpDocImageRoutes` is public (UUID ids). Needs `DATABASE_URL` + `BASE_URL`; URL input only.
 - **Never store Doc images `ephemeral`** — ClickUp re-fetches on every view; an expiring blob 404s later.
 
+### Attachments (download)
+
+- **Attachment URLs are not public and ClickUp documents no download** — anonymously `t<ws>.p.clickup-attachments.com` 302s into `id.app.clickup.com/.../authz_token` → `app.clickup.com/login`, ending in a 200 HTML page; with an `Authorization` header it answers 401 instead (probed 2026-11-14), so the header is evaluated. That it ACCEPTS the connection's OAuth token is **UNVERIFIED live** — the first thing to check (ticket 1245xawggz2's "done when": the 43m 43s mp4 from doc `2kyq568v-60755`).
+- **One path, `src/clickup/attachments.ts`, serves REST `GET /workspaces/{ws}/attachments?url=` and the `getAttachmentInfo` tool** — the token is sent only to `t<ws>.p.clickup-attachments.com/t<ws>/…` (any other host 400: SSRF, and token exfiltration); redirects are followed by hand only within `*.clickup-attachments.com`.
+- **Every way of not getting the file is a 403 "token not accepted"** — upstream 401, a redirect to `*.clickup.com`, or a 200 `text/html` for a non-`.html` path. Never stream it: the reported bug was a login page saved as the recording. Never echo 401 (REST caller's bearer).
+- **The workspace is checked against `GET /team` first** — an invisible workspace is 404 before the CDN is touched. Range is forwarded (`bytes=` only); 206/416 pass through with `Content-Range`; the body streams (no size cap, headers-only 30 s timeout; a client hang-up aborts upstream).
+- **No signed link exists, so a shell-less client cannot download** — `getAttachmentInfo` reads one byte (type, size, Range support, access) and prints the curl.
+
 ### Comments
 
 - **`GET /task/{task_id}/comment` returns the 25 newest, no total/cursor** — page with `start` (oldest comment's `date`) + `start_id` (its `id`) until < 25. `ClickUpClient.getAllTaskComments` serves MCP and REST; cursor verified live.
@@ -71,4 +79,5 @@
 | File | Contains |
 |------|----------|
 | `src/clickup/restWrites.ts` | Each write's camelCase fields (`taskUpdateFields`, …) + op, shared by `server.ts` and `webServer.ts`; documents the native-vs-camelCase split |
+| `src/clickup/attachments.ts` | Attachment URL guard + token-carrying open (redirects, login-page refusal, status mapping), shared by the download route and `getAttachmentInfo` |
 | `src/clickup/docImageIngest.ts` | The one Doc image-ingest path (base64, guarded fetch, store, already-hosted check), shared by MCP and REST |

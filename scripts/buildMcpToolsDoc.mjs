@@ -74,7 +74,7 @@ function sharedToolRegistrants() {
 }
 
 // ---------------------------------------------------------------------------
-// REST catalog map: mcpToolName → "GET /api/v1/path"
+// REST catalog map: mcpToolName → { route: "GET /api/v1/path", mcpOnly? }
 // ---------------------------------------------------------------------------
 
 function loadRestCatalog() {
@@ -90,7 +90,10 @@ function loadRestCatalog() {
     // Only first encounter wins (e.g. listGoogleDocs has both list + search
     // entries pointing at the same path — the list entry is canonical).
     if (!map.has(`${service}:${mcpToolName}`)) {
-      map.set(`${service}:${mcpToolName}`, `${method} ${path}`);
+      // Entries are one line each, so the rest of this line holds the optional fields.
+      const line = arrayMatch[1].slice(m.index, arrayMatch[1].indexOf('\n', m.index));
+      const mcpOnly = line.match(/mcpOnly:\s*'([^']+)'/)?.[1];
+      map.set(`${service}:${mcpToolName}`, { route: `${method} ${path}`, mcpOnly });
     }
   }
   return map;
@@ -282,10 +285,10 @@ function renderTable(tools, restMap, catalogServiceKey) {
   lines.push('| Tool | Description | REST |');
   lines.push('|---|---|---|');
   for (const t of tools) {
-    const rest = catalogServiceKey
-      ? restMap.get(`${catalogServiceKey}:${t.name}`) || '—'
-      : '—';
-    lines.push(`| \`${t.name}\` | ${escapeMd(t.description)} | ${rest === '—' ? '—' : '`' + rest + '`'} |`);
+    const rest = catalogServiceKey ? restMap.get(`${catalogServiceKey}:${t.name}`) : undefined;
+    const cell = !rest ? '—'
+      : '`' + rest.route + '`' + (rest.mcpOnly ? ` (MCP only: ${escapeMd(rest.mcpOnly)})` : '');
+    lines.push(`| \`${t.name}\` | ${escapeMd(t.description)} | ${cell} |`);
   }
   return lines.join('\n');
 }
