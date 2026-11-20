@@ -174,6 +174,41 @@
       <div id="releases">
     <div class="release">
       <div class="release-header">
+        <span class="release-version">v0.14.2</span>
+        <span class="release-date">November 20, 2026</span>
+        <span class="release-tag tag-feature">Feature</span>
+      </div>
+      <div class="release-body">
+        <h3>Action needed</h3>
+        <ul>
+          <li>Reconnect HubSpot MCP from your dashboard: some new features need extra permissions, and an existing connection keeps the old ones until you reconnect</li>
+        </ul>
+        <h3>What's New</h3>
+        <ul>
+          <li><strong>Outline:</strong> Edit documents by replacing specific passages of text while keeping the rest intact, publish or unpublish documents, change icon colors, toggle full-width mode, add comments, upload attachments, import documents, use templates, and view document history</li>
+          <li><strong>HubSpot:</strong> Edit activities (notes, tasks, calls, meetings, logged emails), create and manage tickets, customize pipelines and stages, log emails to the timeline, and view users and teams (reconnect to use it)</li>
+          <li><strong>PeopleForce:</strong> View employee salaries, public holidays and holiday policies, track absences and leave requests with v4 API support, and access custom fields</li>
+          <li><strong>Supabase:</strong> Manage storage buckets and configuration, submit and delete feedback, and create, run, and manage notebooks</li>
+          <li><strong>Browserbase:</strong> Choose your automation model (provider and API key), enable session keep-alive, configure proxies, and use verified browsers</li>
+          <li><strong>ClickUp:</strong> Download attachments from Docs and tasks with proper authentication, and get attachment details including size and type</li>
+          <li><strong>Slack:</strong> Rename lists, update descriptions, and toggle todo mode</li>
+          <li><strong>Google Sheets:</strong> View both the format you set and the effective format (including theme defaults and conditional formatting) when inspecting cells</li>
+        </ul>
+        <h3>Bug Fixes</h3>
+        <ul>
+          <li><strong>HubSpot:</strong> Ticket updates now correctly report which properties were confirmed and which couldn't be verified after saving</li>
+          <li><strong>PeopleForce:</strong> Leave requests now only show the requested employee's absences, not colleagues' leave, and working-day exceptions are properly labeled</li>
+          <li><strong>Outline:</strong> Document edits now properly verify that your changes were saved by checking the surrounding text, preventing accidental content loss on older servers</li>
+          <li><strong>Outline:</strong> Attachment uploads now properly block connections to private network addresses throughout the entire upload process</li>
+          <li><strong>Supabase:</strong> Settings changes and token refreshes no longer interfere with each other when happening at the same time</li>
+          <li><strong>Browserbase:</strong> Settings saves now handle concurrent changes gracefully and report proper errors when a connection is deleted mid-save</li>
+          <li><strong>Browserbase:</strong> Session end now correctly reports billing status only when the session actually stops</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="release">
+      <div class="release-header">
         <span class="release-version">v0.14.1</span>
         <span class="release-date">November 13, 2026</span>
         <span class="release-tag tag-feature">Feature</span>
