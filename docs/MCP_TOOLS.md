@@ -15,7 +15,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (49)
 - [Slack (bot)](#slack-bot-) (9)
-- [Slack (user)](#slack-user-) (17)
+- [Slack (user)](#slack-user-) (21)
 - [Outline](#outline) (43)
 - [PeopleForce](#peopleforce) (50)
 - [PeopleForce v4](#peopleforce-v4) (46)
@@ -262,7 +262,7 @@ Source: `src/slack/server.ts` — 9 tools.
 
 ## Slack (user)
 
-Source: `src/slack-user/server.ts` — 17 tools.
+Source: `src/slack-user/server.ts` — 21 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -277,6 +277,10 @@ Source: `src/slack-user/server.ts` — 17 tools.
 | `editMessage` | Edit one of your own Slack messages, replacing its content. Pass markdownText or blocks to convert a message that was posted as plain text into one with real bullet or numbered lists. WARNING: passing only text on a message that currently has blocks REMOVES those blocks (Slack's own replacement rule), so to keep rendered content re-send it. Get the ts from readChannelHistory or readThreadReplies. | — |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | — |
 | `openDm` | Open (or retrieve) a DM: 1-on-1 with userId, or a group DM with userIds (2-8 people). Returns the channel ID to use with postMessage. | — |
+| `listUnreadConversations` | List your Slack channels and DMs that have unread messages, each with its unread count and first unread message. Checks up to `limit` conversations per call; pass the returned cursor to continue. Access rules are enforced. | — |
+| `getFirstUnreadMessage` | Show the first unread message (or first few) in a Slack channel or DM, after your read cursor. Access rules are enforced. | — |
+| `markConversationRead` | Mark a Slack channel or DM read, up to a given message or (by default) its newest. Moves your real Slack read cursor; never moves it backwards. | — |
+| `markUnreadFrom` | Mark a Slack message and everything after it unread (like Slack's "Mark unread"). Channel-level: pass a top-level message ts. | — |
 | `subscribeToChannelEvents` | Record interest in a Slack channel's events so they accrue in a durable store you can query later with getChannelEventHistory, instead of re-reading the channel and tracking your own watermark. IDEMPOTENT: re-calling for the same channel returns the existing subscription. Events are "message" (new messages and thread replies in public channels, private channels, DMs, and group DMs; join/leave noise is excluded) and "reaction_added". Slack delivers each of those channel types through a SEPARATE app-level toggle (message.channels / message.groups / message.im / message.mpim), so a workspace with only message.channels enabled records nothing for a DM — this tool names the one your channel needs. Optionally set matchPattern to record only messages whose text contains it (case-insensitive substring). History accrues from this moment forward — for anything earlier use readChannelHistory. Requires the operator to have configured the Slack app's Event Subscriptions Request URL and SLACK_SIGNING_SECRET; run debugChannelEventSubscription if events do not arrive. Access rules are enforced. | — |
 | `listChannelEventSubscriptions` | List the Slack channel-event subscriptions you own, with their event types, match patterns and fail counts. Optionally narrow to one channel. | — |
 | `getChannelEventHistory` | Read the Slack events captured for a channel since you subscribed to it — the exact record of what happened, instead of re-reading the channel and filtering client-side. IMPORTANT: history only accrues from the moment subscribeToChannelEvents was called; the response reports that boundary, and for earlier windows you should fall back to readChannelHistory. If no subscription exists this reports that as a warning rather than an error, so a routine can fall back cleanly. Access rules are enforced on every call, so a channel that has since been denied stops returning history. | — |
@@ -695,4 +699,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 510 tools across 22 sections.**
+**Grand total: 514 tools across 22 sections.**

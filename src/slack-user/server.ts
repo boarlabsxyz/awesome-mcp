@@ -27,7 +27,11 @@ import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { guardFileByShares, registerSlackWorkspaceTools } from '../slack/workspaceTools.js';
-import { resolveDmUsers } from '../slack/helpers.js';
+import { resolveDmUsers, formatMessage, formatTimestamp, getWorkspaceUrl } from '../slack/helpers.js';
+import {
+  scanUnread, findFirstUnread, readCursor, markRead, markUnreadFrom, isRateLimited,
+  NEVER_READ, FIRST_UNREAD_MAX_PAGES, FIRST_UNREAD_PAGE_SIZE, type MarkOutcome, type ScanSource,
+} from './readState.js';
 
 export const slackUserServer = instrumentServer(new FastMCP<UserSession>({
   name: 'Slack MCP Server',
@@ -150,23 +154,33 @@ async function buildChannelFilter(client: SlackClient, session: UserSession): Pr
     if (cached !== undefined) return cached;
     let allowed: boolean;
     try {
-      const meta = await fetchChannelMeta(client, id, tokenKey);
-      assertAccess(rules, meta);
-      // Same DM/group-DM rules a direct read gets. Without this, search results
-      // from a DM with a non-allowed org — or a group DM holding a blacklisted
-      // member — pass a filter that a direct read would reject. The extra
-      // lookups only fire when allowedOrgs/blacklistUsers are configured, and
-      // `decided` keeps it to once per channel per call.
-      await assertDmMemberAccess(client, rules, meta, id);
-      allowed = true;
+      allowed = await passesAllRules(client, rules, await fetchChannelMeta(client, id, tokenKey));
     } catch {
-      // A UserError means denied; anything else (channel gone, API blip) also
-      // fails closed — better a missing result than a leaked one.
       allowed = false;
     }
     decided.set(id, allowed);
     return allowed;
   };
+}
+
+/**
+ * The full verdict a direct read would reach, as a boolean that fails closed.
+ *
+ * Includes the DM/group-DM rules: without them, a DM with a non-allowed org —
+ * or a group DM holding a blacklisted member — passes a filter that a direct
+ * read would reject. The extra lookups only fire when allowedOrgs/
+ * blacklistUsers are configured. A UserError means denied; anything else
+ * (channel gone, API blip) also fails closed — better a missing result than a
+ * leaked one.
+ */
+async function passesAllRules(client: SlackClient, rules: SlackAccessRules, meta: ChannelMeta): Promise<boolean> {
+  try {
+    assertAccess(rules, meta);
+    await assertDmMemberAccess(client, rules, meta, meta.id);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // === Tools ===
@@ -693,6 +707,190 @@ slackUserServer.addTool({
     const result = await client.conversationsOpen(users.join(','));
     const kind = users.length > 1 ? `Group DM with ${users.length} people` : 'DM channel';
     return `${kind} opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
+  },
+});
+
+// === Read state ===
+//
+// Slack keeps one read cursor per conversation, for this user — the same one
+// their Slack apps show — so marking here changes the badge they see. Logic
+// and caps live in readState.ts.
+
+const THREADS_NOTE = 'Thread replies are not covered: Slack\'s API does not expose thread read state.';
+
+const UNREAD_TYPES = { public: 'public_channel', private: 'private_channel', im: 'im', mpim: 'mpim' } as const;
+
+/** `#name`, `DM with <person>`, or `Group DM <name>`. */
+function conversationLabel(meta: ChannelMeta, userNames: Map<string, string>): string {
+  if (meta.is_im) return `DM with ${(meta.user && userNames.get(meta.user)) || meta.user || 'unknown'}`;
+  if (meta.is_mpim) return `Group DM ${meta.name}`;
+  return `#${meta.name}`;
+}
+
+function describeCursor(lastRead: string | null): string {
+  if (lastRead === null) return 'unknown';
+  if (lastRead === NEVER_READ) return 'nothing read yet';
+  return `${formatTimestamp(lastRead)} (ts ${lastRead})`;
+}
+
+/** Confirmation is three-valued: Slack answers ok to a mark it did not apply as readily as to one it did. */
+function renderMarkOutcome(channelId: string, outcome: MarkOutcome, done: string): string {
+  if (outcome.alreadyDone) return `Nothing to change in ${channelId}: ${done} already (read cursor: ${describeCursor(outcome.before)}).`;
+  if (outcome.confirmed === true) return `Done: ${done} in ${channelId}. Read cursor: ${describeCursor(outcome.before)} → ${describeCursor(outcome.after)}.`;
+  if (outcome.confirmed === false) {
+    return `Slack accepted the request but the read cursor in ${channelId} did not move as asked (asked for ts ${outcome.requested}, now ${describeCursor(outcome.after)}). Treat it as NOT done.`;
+  }
+  return `Slack accepted the request, but the read cursor in ${channelId} could not be re-read, so whether ${done} is unconfirmed.`;
+}
+
+slackUserServer.addTool({
+  name: 'listUnreadConversations',
+  annotations: { readOnlyHint: true },
+  description: 'List your Slack channels and DMs that have unread messages, each with its unread count and first unread message. Checks up to `limit` conversations per call; pass the returned cursor to continue. Access rules are enforced.',
+  parameters: z.object({
+    types: z.array(z.enum(['public', 'private', 'im', 'mpim'])).min(1).optional().describe('Conversation kinds to check: public channels, private channels, DMs (im), group DMs (mpim). Default: all four. Not combinable with channelIds.'),
+    channelIds: z.array(z.string()).min(1).max(50).optional().describe('Check only these conversation IDs instead of every conversation you are in.'),
+    limit: z.number().int().min(1).max(50).optional().default(25).describe('Conversations to check in this call (1-50, default 25). Each costs two rate-limited Slack calls.'),
+    cursor: z.string().optional().describe('Cursor from a previous response, to continue the same scan (pass the same types/channelIds).'),
+    includeFirstMessage: z.boolean().optional().default(true).describe('Show the first unread message of each conversation (default true). Costs no extra Slack calls.'),
+  }),
+  execute: async (args, { log, session }) => {
+    if (args.types && args.channelIds) {
+      throw new UserError('Pass types or channelIds, not both: channelIds already names exactly which conversations to check.');
+    }
+    const client = getSlackUserClient(session);
+    const rules = await getRules(session!);
+    const tokenKey = getTokenKey(session!);
+    log.info(`Scanning up to ${args.limit} conversations for unreads`);
+
+    const source: ScanSource = args.channelIds
+      ? { kind: 'ids', ids: args.channelIds }
+      : { kind: 'member', types: (args.types ?? (['public', 'private', 'im', 'mpim'] as const)).map(t => UNREAD_TYPES[t]).join(',') };
+    const { user_id: selfUserId } = await client.authTest();
+    const scan = await scanUnread(client, {
+      source, cursor: args.cursor, max: args.limit, selfUserId,
+      allow: meta => passesAllRules(client, rules, meta),
+    });
+
+    const nameIds = [
+      ...scan.rows.filter(r => r.meta.is_im && r.meta.user).map(r => r.meta.user!),
+      ...(args.includeFirstMessage ? scan.rows.flatMap(r => (r.first?.user ? [r.first.user] : [])) : []),
+    ];
+    const userNames = nameIds.length > 0 ? await resolveUsers(client, nameIds, tokenKey) : new Map<string, string>();
+    const workspaceUrl = args.includeFirstMessage ? await getWorkspaceUrl(client, tokenKey) : '';
+
+    const blocks = scan.rows.map((row, i) => {
+      const lines = [
+        `${i + 1}. ${conversationLabel(row.meta, userNames)} (${row.meta.id})`,
+        `   Unread: ${row.unreadCount}${row.countIsFloor ? '+' : ''}`,
+        `   Read up to: ${describeCursor(row.lastRead)}`,
+      ];
+      if (args.includeFirstMessage && row.first) {
+        // Past the probe page, Slack may have handed back the newest unreads,
+        // so the earliest one seen is not proven to be the first.
+        const label = row.countIsFloor ? 'Earliest unread seen (more exist; getFirstUnreadMessage finds the true first)' : 'First unread';
+        lines.push(`   ${label}: ${formatMessage(row.first, userNames, row.meta.id, workspaceUrl)}`);
+      }
+      return lines.join('\n');
+    });
+
+    const summary = [`Checked ${scan.checked} conversation(s): ${scan.rows.length} with unread messages, ${scan.read} fully read`];
+    if (scan.unknown.length > 0) summary.push(`${scan.unknown.length} could not be checked`);
+    if (scan.hidden > 0) summary.push(`${scan.hidden} hidden by your access rules`);
+    let footer = summary.join(', ') + '.';
+    for (const u of scan.unknown) footer += `\n  Not checked: ${u.id} — ${u.reason}`;
+    if (scan.rateLimited) footer += '\nStopped early: Slack rate limit reached. Wait a minute, then continue with the cursor below.';
+    if (scan.nextCursor) {
+      footer += `\nNOT every conversation was checked — more remain. Continue with cursor: "${scan.nextCursor}"`;
+    }
+    footer += `\n${THREADS_NOTE}`;
+
+    if (blocks.length === 0) {
+      const scope = scan.nextCursor ? `in the ${scan.checked} conversation(s) checked so far` : `in any of the ${scan.checked} conversation(s) checked`;
+      return `No unread messages ${scope}.\n\n---\n${footer}`;
+    }
+    return `Found ${blocks.length} conversation(s) with unread messages:\n\n${blocks.join('\n\n')}\n\n---\n${footer}`;
+  },
+});
+
+slackUserServer.addTool({
+  name: 'getFirstUnreadMessage',
+  annotations: { readOnlyHint: true },
+  description: 'Show the first unread message (or first few) in a Slack channel or DM, after your read cursor. Access rules are enforced.',
+  parameters: z.object({
+    channelId: z.string().describe('The Slack channel or DM ID (e.g., C01234ABCDE), from listUnreadConversations or listChannels.'),
+    count: z.number().int().min(1).max(20).optional().default(1).describe('How many unread messages to show, oldest first (1-20, default 1).'),
+  }),
+  execute: async (args, { log, session }) => {
+    const client = getSlackUserClient(session);
+    await enforceAccess(client, session!, args.channelId);
+    log.info(`Finding first unread in ${args.channelId}`);
+    const tokenKey = getTokenKey(session!);
+
+    const { lastRead } = await readCursor(client, args.channelId);
+    if (lastRead === null) {
+      throw new UserError(`Slack returned no read cursor for ${args.channelId}. Read state exists only for conversations you are a member of.`);
+    }
+    const { user_id: selfUserId } = await client.authTest();
+    let scan;
+    try {
+      scan = await findFirstUnread(client, args.channelId, lastRead, selfUserId, args.count);
+    } catch (err) {
+      if (isRateLimited(err)) throw new UserError('Slack rate limit reached while reading history. Wait a minute and try again.');
+      throw err;
+    }
+
+    const header = `${args.channelId} — read up to ${describeCursor(lastRead)}.`;
+    if (scan.messages.length === 0) {
+      // Only a complete scan proves there is nothing unread.
+      return scan.complete
+        ? `${header}\nNo unread messages. ${THREADS_NOTE}`
+        : `${header}\nNo unread messages from others in the ${FIRST_UNREAD_MAX_PAGES * FIRST_UNREAD_PAGE_SIZE} messages scanned, but more history follows the read cursor and was not scanned.`;
+    }
+
+    const userNames = await resolveUsers(client, scan.messages.flatMap(m => (m.user ? [m.user] : [])), tokenKey);
+    const workspaceUrl = await getWorkspaceUrl(client, tokenKey);
+    const lines = scan.messages.map(m => formatMessage(m, userNames, args.channelId, workspaceUrl));
+    const total = scan.complete ? `${scan.unreadSeen} unread message(s) in total.` : `At least ${scan.unreadSeen} unread message(s).`;
+    const caveat = scan.complete
+      ? ''
+      : `\nThe scan stopped after ${FIRST_UNREAD_MAX_PAGES} pages of history, so an earlier unread message may exist: these are the earliest found, not proven first.`;
+    const title = scan.messages.length === 1 ? 'First unread message' : `First ${scan.messages.length} unread messages`;
+    return `${header}\n${title}${scan.complete ? '' : ' found'}:\n\n${lines.join('\n')}\n\n---\n${total}${caveat}\n${THREADS_NOTE}`;
+  },
+});
+
+slackUserServer.addTool({
+  name: 'markConversationRead',
+  annotations: { readOnlyHint: false },
+  description: 'Mark a Slack channel or DM read, up to a given message or (by default) its newest. Moves your real Slack read cursor; never moves it backwards.',
+  parameters: z.object({
+    channelId: z.string().describe('The Slack channel or DM ID.'),
+    ts: z.string().optional().describe('Mark read up to and including this message ts. Default: the newest message.'),
+  }),
+  execute: async (args, { log, session }) => {
+    const client = getSlackUserClient(session);
+    await enforceAccess(client, session!, args.channelId);
+    log.info(`Marking ${args.channelId} read up to ${args.ts ?? 'newest'}`);
+    const outcome = await markRead(client, args.channelId, args.ts);
+    return renderMarkOutcome(args.channelId, outcome, `read up to ${args.ts ? `ts ${args.ts}` : 'the newest message'}`);
+  },
+});
+
+slackUserServer.addTool({
+  name: 'markUnreadFrom',
+  annotations: { readOnlyHint: false },
+  description: 'Mark a Slack message and everything after it unread (like Slack\'s "Mark unread"). Channel-level: pass a top-level message ts.',
+  parameters: z.object({
+    channelId: z.string().describe('The Slack channel or DM ID.'),
+    ts: z.string().describe('The ts of the first message to make unread, from readChannelHistory or getFirstUnreadMessage.'),
+  }),
+  execute: async (args, { log, session }) => {
+    const client = getSlackUserClient(session);
+    await enforceAccess(client, session!, args.channelId);
+    log.info(`Marking ${args.channelId} unread from ${args.ts}`);
+    const outcome = await markUnreadFrom(client, args.channelId, args.ts);
+    return renderMarkOutcome(args.channelId, outcome, `unread from ts ${args.ts}`);
   },
 });
 

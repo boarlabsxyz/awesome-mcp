@@ -29,6 +29,16 @@ Shared Slack code (files, posting/editing, channel events, `SlackClient`): see `
 - **Page numbers are Slack's, not the filtered list's** — a page can be empty while more exist; the response says so and how many results the rules hid. `search.*` pages by `page`/`count`, not `cursor`.
 - **No REST sibling** — the REST plane is gated on `slackBotToken` because access rules can't be applied there.
 
+### Read state (`readState.ts`: `listUnreadConversations`, `getFirstUnreadMessage`, `markConversationRead`, `markUnreadFrom`)
+- **One cursor per conversation, nothing per message** — `last_read` from an *uncached* `conversations.info` (never `fetchChannelMeta`, whose 5-min cache would serve a stale cursor); unread = ts after it, excluding the caller's own messages. Thread read state is not in Slack's public API, so every response says threads are not covered.
+- **Marks move the user's real Slack cursor** (the badge in their apps). `markRead` never moves it backwards and `markUnreadFrom` never forwards, or a mark would silently flip unrelated messages; both re-read the cursor and confirm three-valued.
+- **`markUnreadFrom` marks to `ts − 1µs`** (`microsToTs`/`tsToMicros`, BigInt — floats lose the last digit). UNVERIFIED live that `conversations.mark` accepts a ts that is not a message; the re-read reports it if Slack snaps or ignores it.
+- **Scan cost is one `conversations.info` + one 15-message history probe per conversation**, so `listUnreadConversations` checks `limit` (≤50) per call and returns our own cursor (base64 `{c: users.conversations cursor, o: offset}`); a 429 stops the scan with a cursor at the conversation it hit. A probe of only own messages with more history is `unknown`, never "read".
+- **Rules are judged on the same info payload** (`channelMetaFromInfo` + `passesAllRules`, search's fail-closed verdict incl. DM member checks); a denied conversation's history is never fetched and it is only counted. The tool takes no `channelId`, so `tools.test.ts` checks the `allow:` wiring by source.
+- **First unread is the minimum over everything scanned** (≤5×200 messages), because which end `conversations.history` starts from when given only `oldest` is UNVERIFIED; a capped scan says the result may not be the first. The list tool's first message is only the probe's earliest, labelled as such when the count is a floor.
+- **Writes need `SLACK_WRITES_ENABLED` and `channels:write`/`groups:write`** (channels) or `im:write`/`mpim:write` (DMs) — all already seeded, but connections made before v0.14.1 lack the first two and get `missing_scope` on channels until they reconnect.
+- **Slack's 2025 limits for non-Marketplace apps (history: 1 call/min, 15 messages) would make the scan crawl** — UNVERIFIED whether they apply to this app's installs; check first if scans keep stopping on rate limits.
+
 ### Org discovery (`orgDiscovery.ts`, `discoverConnectedOrgs`)
 - **An undiscovered org has no checkbox and can never be allowed**, so under-reporting is a silent access failure — every cap is reported via `orgDiscovery.truncated` + notes and shown as a warning.
 - **Five sources, none sufficient alone:** `conversations.list` (public+private, `limit: 1000`, capped by `LIST_MAX_PAGES`); `users.conversations` public+private (member-scoped, reaches the user's shared channels when the workspace sweep runs out); `users.conversations` `im,mpim` (`conversations.list` never returns DMs); `users.list` (each user's `team_id`); `conversations.info` for shared channels with no team in the payload.
@@ -46,3 +56,4 @@ Shared Slack code (files, posting/editing, channel events, `SlackClient`): see `
 | `src/slack-user/accessControl.ts` | `assertAccess`, `assertNonOrgAccess`, `classifyChannelList` |
 | `src/slack-user/orgDiscovery.ts` | `discoverConnectedOrgs` — Access Rules org checkboxes |
 | `src/slack-user/teamNames.ts` | `resolveTeamNames` — token-keyed org-name cache |
+| `src/slack-user/readState.ts` | Read cursor: `scanUnread`, `findFirstUnread`, `markRead`, `markUnreadFrom`, ts arithmetic |
