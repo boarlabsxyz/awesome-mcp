@@ -34,6 +34,7 @@ FastMCPModule.FastMCP.prototype.addTool = origAddTool;
 const toolMap = new Map<string, any>(registrations.map(t => [t.name, t]));
 
 const SEARCH_TOOLS = ['searchMessages', 'searchFiles'];
+const READ_STATE_TOOLS = ['listUnreadConversations', 'getFirstUnreadMessage', 'markConversationRead', 'markUnreadFrom'];
 const EVENT_TOOLS = [
   'subscribeToChannelEvents',
   'listChannelEventSubscriptions',
@@ -49,7 +50,7 @@ describe('slack-user tool registry', () => {
     assert.equal(registrations.length, toolMap.size, 'duplicate tool name registered');
   });
 
-  it('registers the 8 original tools, editMessage, diagnoseChannelAccess, 2 search tools, 5 event tools, the workspace tools and 2 shared tools', () => {
+  it('registers the 8 original tools, editMessage, diagnoseChannelAccess, 2 search tools, 4 read-state tools, 5 event tools, the workspace tools and 2 shared tools', () => {
     const expected = [
       'listChannels', 'readChannelHistory', 'readThreadReplies', 'downloadFile',
       'postMessage', 'replyInThread', 'editMessage', 'listUsers', 'openDm',
@@ -58,6 +59,7 @@ describe('slack-user tool registry', () => {
       'createList', 'updateList', 'getListItems', 'getListItem', 'createListItem', 'updateListItem',
       'diagnoseChannelAccess',
       ...SEARCH_TOOLS,
+      ...READ_STATE_TOOLS,
       ...EVENT_TOOLS,
       'mintRestBearerForCurl', 'listRestEndpoints',
     ];
@@ -65,10 +67,15 @@ describe('slack-user tool registry', () => {
   });
 
   it('marks reads read-only and writes not', () => {
-    for (const name of ['searchMessages', 'searchFiles', 'listChannelEventSubscriptions', 'getChannelEventHistory', 'debugChannelEventSubscription', 'diagnoseChannelAccess']) {
+    for (const name of ['searchMessages', 'searchFiles', 'listUnreadConversations', 'getFirstUnreadMessage', 'listChannelEventSubscriptions', 'getChannelEventHistory', 'debugChannelEventSubscription', 'diagnoseChannelAccess']) {
       assert.equal(toolMap.get(name).annotations.readOnlyHint, true, `${name} should be read-only`);
     }
     assert.equal(toolMap.get('subscribeToChannelEvents').annotations.readOnlyHint, false);
+    // Marking moves the user's real Slack cursor, but nothing is lost: each is
+    // undone by the other, so neither is destructive.
+    for (const name of ['markConversationRead', 'markUnreadFrom']) {
+      assert.deepEqual(toolMap.get(name).annotations, { readOnlyHint: false }, `${name} should be a plain write`);
+    }
   });
 
   it('marks editMessage a plain write, not destructive', () => {
@@ -150,7 +157,7 @@ describe('slack-user tool registry', () => {
   it('describes every parameter of every new tool', () => {
     // The LLM fills arguments from these descriptions; a missing one silently
     // degrades tool-call quality.
-    for (const name of [...SEARCH_TOOLS, ...EVENT_TOOLS]) {
+    for (const name of [...SEARCH_TOOLS, ...READ_STATE_TOOLS, ...EVENT_TOOLS]) {
       const shape = toolMap.get(name).parameters.shape;
       for (const [param, schema] of Object.entries<any>(shape)) {
         assert.ok(schema.description, `${name}.${param} has no .describe()`);
@@ -244,7 +251,7 @@ describe('slack-user access gating', () => {
   it('gates the write tools specifically', () => {
     // Spelled out separately: a write that skips the check does not just leak,
     // it mutates a channel the user denied.
-    for (const name of ['postMessage', 'replyInThread', 'editMessage']) {
+    for (const name of ['postMessage', 'replyInThread', 'editMessage', 'markConversationRead', 'markUnreadFrom']) {
       assert.ok(
         toolSource(name).includes('enforceAccess('),
         `${name} must call enforceAccess`,
@@ -260,6 +267,13 @@ describe('slack-user access gating', () => {
       const firstCall = block.search(/client\.|perform[A-Z]/);
       assert.ok(firstCall === -1 || guard < firstCall, `${name} must guard before calling Slack`);
     }
+  });
+
+  it('judges every conversation listUnreadConversations scans with the full rules', () => {
+    // It takes no channelId, so the check above skips it, yet it reads the
+    // history of every conversation the user is in. passesAllRules is the
+    // search filter's verdict, DM member rules included, failing closed.
+    assert.match(toolSource('listUnreadConversations'), /allow: meta => passesAllRules\(client, rules, meta\)/);
   });
 
   it('wires the shared workspace tools to enforceAccess and the file guard', () => {
@@ -292,6 +306,28 @@ describe('slack-user search tool schemas', () => {
 
   it('leaves page unset so the client applies Slack\'s default', () => {
     assert.equal(toolMap.get('searchMessages').parameters.parse({ query: 'x' }).page, undefined);
+  });
+});
+
+describe('slack-user read-state tool schemas', () => {
+  it('defaults listUnreadConversations to 25 conversations with first messages, capped at 50', () => {
+    const parameters = toolMap.get('listUnreadConversations').parameters;
+    assert.deepEqual(parameters.parse({}), { limit: 25, includeFirstMessage: true });
+    assert.throws(() => parameters.parse({ limit: 51 }));
+    assert.throws(() => parameters.parse({ types: ['dm'] }));
+  });
+
+  it('refuses types with channelIds in execute, where the message can explain it', async () => {
+    const noSession = { session: undefined, log: { info: () => {}, error: () => {}, warn: () => {} } };
+    await assert.rejects(
+      () => toolMap.get('listUnreadConversations').execute({ types: ['im'], channelIds: ['C1'], limit: 25, includeFirstMessage: true }, noSession),
+      /types or channelIds, not both/,
+    );
+  });
+
+  it('requires a ts to mark unread but not to mark read', () => {
+    assert.throws(() => toolMap.get('markUnreadFrom').parameters.parse({ channelId: 'C1' }), /ts/);
+    assert.deepEqual(toolMap.get('markConversationRead').parameters.parse({ channelId: 'C1' }), { channelId: 'C1' });
   });
 });
 
