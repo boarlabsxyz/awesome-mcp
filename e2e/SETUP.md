@@ -114,7 +114,7 @@ connection, which would otherwise fail every write check at setup time.
 ```bash
 export E2E_FIXTURE_DOC_ID=1nZ8Q1StnT0QDUcfZ9_Ihrzh3PZJjVpGC0Kvg4qTW688
 export E2E_FIXTURE_DOC_NEEDLE=BANANA-PHONE-7714
-export E2E_FIXTURE_DOC_TITLE="<the doc's exact title>"
+export E2E_FIXTURE_DOC_TITLE="<the doc's exact title, unique in the account>"
 ```
 
 Only if you build a fresh fixture account:
@@ -155,7 +155,7 @@ A fully configured run is **10 pass, 1 todo, 0 fail**. The todo is deliberate:
 `listGoogleDocs` does not report its scan extent yet, and that is a gap in the
 tool, not a regression — flip it to a real assertion in the commit that fixes it.
 
-Artifacts land in `.artifacts/local/direct-<account>/<tool>.<shape>/` as
+Artifacts land in `.artifacts/local/direct-<account>/<service>.<tool>.<shape>/` as
 `summary.json` + `response.txt`. Read `response.txt` before changing any
 assertion: a surprising answer is a finding, not a broken check.
 

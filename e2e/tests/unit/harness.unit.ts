@@ -6,7 +6,9 @@ import {
   findReportedFailure,
   findUnsafeChar,
 } from '../../assertions.ts';
-import { scratchTitle, sweepScratch } from '../../setup/docsScratch.ts';
+import { scratchTitle, sweepCutoff, sweepScratch } from '../../setup/docsScratch.ts';
+import { createdEventId, sweepScratchEvents } from '../../setup/calendarScratch.ts';
+import { checkFixtureTaskRow } from '../tools/clickupTaskRow.ts';
 import type { McpClient, ToolResult } from '../../transports/mcpHttp.ts';
 
 // The invariant engine and the sweeper are the two pieces every future check
@@ -58,26 +60,12 @@ test('minLines counts non-empty lines', () => {
   assert.throws(() => checkInvariants('a\n\nb', { minLines: 3 }), /2 non-empty lines/);
 });
 
-test('sweepScratch trashes only titles older than the cutoff', async () => {
-  const hourAgo = Date.now() - 60 * 60 * 1000;
-  const old = scratchTitle('oldTool', hourAgo);
-  const fresh = scratchTitle('freshTool');
-  const deleted: string[] = [];
-
-  const listing =
-    `Found 3 Google Document(s):\n\n` +
-    `1. **${old}**\n   ID: doc-old\n   Modified: 1/1/2026\n   Owner: e2e\n\n` +
-    `2. **${fresh}**\n   ID: doc-fresh\n   Modified: 1/1/2026\n   Owner: e2e\n\n` +
-    // A human-named doc that merely starts with the query -- must survive, since
-    // the sweeper dates a doc from its title and this one carries no stamp.
-    `3. **e2e-notes-do-not-delete**\n   ID: doc-human\n   Modified: 1/1/2026\n   Owner: e2e\n\n`;
-
-  // Each fake answers ONLY the tools its real server registers and throws the
-  // same "Unknown tool" a FastMCP server throws otherwise. That is the whole
-  // point of these doubles: an earlier version of sweepScratch took one client
-  // and called listGoogleDocs (docs server) and deleteFile (drive server) on it,
-  // which a permissive fake happily answered and a live run did not.
-  const fake = (name: string, tools: Record<string, (args: any) => string>): McpClient => ({
+// Each fake answers ONLY the tools its real server registers and throws the
+// same "Unknown tool" a FastMCP server throws otherwise. An earlier sweeper
+// called a docs-server tool and a drive-server tool on one client, which a
+// permissive fake happily answered and a live run did not.
+function fake(name: string, tools: Record<string, (args: any) => string>): McpClient {
+  return {
     async callTool(tool, args): Promise<ToolResult> {
       const handler = tools[tool];
       if (!handler) throw new Error(`MCP error -32601: Unknown tool: ${tool}`);
@@ -88,50 +76,97 @@ test('sweepScratch trashes only titles older than the cutoff', async () => {
     },
     async close() {},
     describe: () => name,
-  });
+  };
+}
 
-  const docs = fake('fake-docs', { listGoogleDocs: () => listing });
+/** A searchDriveFiles entry (fileLine in src/google-drive/server.ts). */
+const driveEntry = (n: number, name: string, mimeType: string, id: string) =>
+  `${n}. **${name}** (${mimeType})\n   ID: ${id} · modified 2026-01-01 00:00\n   https://example.test/${id}`;
+const DOC = 'application/vnd.google-apps.document';
+const SHEET = 'application/vnd.google-apps.spreadsheet';
+const FOLDER = 'application/vnd.google-apps.folder';
+
+test('sweepScratch trashes stale scratch docs, sheets and folders, and nothing else', async () => {
+  const hourAgo = Date.now() - 60 * 60 * 1000;
+  const deleted: string[] = [];
+  const listing = [
+    '5 file(s), sorted by modifiedTime desc:',
+    '',
+    // A folder listed FIRST is still trashed LAST, after the files it may hold.
+    driveEntry(1, scratchTitle('folderTool', hourAgo), FOLDER, 'folder-old'),
+    driveEntry(2, scratchTitle('docTool', hourAgo), DOC, 'doc-old'),
+    driveEntry(3, scratchTitle('sheetTool', hourAgo), SHEET, 'sheet-old'),
+    driveEntry(4, scratchTitle('freshTool'), DOC, 'doc-fresh'),
+    // A human-named file that merely contains the query -- must survive, since
+    // the sweeper dates a file from its title and this one carries no stamp.
+    driveEntry(5, 'e2e-notes-do-not-delete', DOC, 'doc-human'),
+  ].join('\n\n');
+
   const drive = fake('fake-drive', {
+    searchDriveFiles: (args) => {
+      assert.equal(args.searchIn, 'name');
+      return listing;
+    },
     deleteFile: (args) => {
       deleted.push(String(args.fileId));
       return 'Moved file to trash.';
     },
   });
 
-  const result = await sweepScratch({ docs, drive }, { maxAgeHours: 0.5 });
-  assert.deepEqual(deleted, ['doc-old']);
-  assert.equal(result.trashed.length, 1);
+  const result = await sweepScratch(drive, { maxAgeHours: 0.5 });
+  assert.deepEqual(deleted, ['doc-old', 'sheet-old', 'folder-old']);
+  assert.equal(result.trashed.length, 3);
   assert.equal(result.kept, 2);
+  assert.equal(result.capped, false);
 });
 
-test('sweepScratch reaches for each tool on the server that registers it', async () => {
-  // Regression lock on the service split. A single-client sweeper passes the
-  // unit test above only because the doubles are separate; this asserts the
-  // routing directly, so collapsing them back fails here rather than in prod.
-  const asked: Record<string, string[]> = { docs: [], drive: [] };
-  const spy = (which: string, reply: string): McpClient => ({
-    async callTool(tool): Promise<ToolResult> {
-      asked[which].push(tool);
-      return { text: reply, isError: false, raw: null };
+test('sweepScratch follows the page token and says when it stopped early', async () => {
+  const stale = (id: string) => driveEntry(1, scratchTitle(id, Date.now() - 60 * 60 * 1000), DOC, id);
+  const pages: string[] = [];
+  const drive = fake('fake-drive', {
+    searchDriveFiles: (args) => {
+      pages.push(String(args.pageToken ?? 'first'));
+      // Every page points at another, so only the page cap ends the loop.
+      return `1 file(s), sorted by modifiedTime desc:\n\n${stale(`doc-${pages.length}`)}\nMORE results: call again with pageToken "p${pages.length + 1}".`;
     },
-    async listTools() {
-      return [];
-    },
-    async close() {},
-    describe: () => which,
+    deleteFile: () => 'Moved file to trash.',
   });
 
-  const stale = scratchTitle('x', Date.now() - 60 * 60 * 1000);
-  await sweepScratch(
-    {
-      docs: spy('docs', `Found 1 Google Document(s):\n\n1. **${stale}**\n   ID: doc-1\n`),
-      drive: spy('drive', 'Moved file to trash.'),
-    },
-    { maxAgeHours: 0.5 },
-  );
+  const result = await sweepScratch(drive, { maxAgeHours: 0.5, dryRun: true });
+  assert.equal(pages[0], 'first');
+  assert.equal(pages[1], 'p2');
+  assert.equal(result.trashed.length, pages.length);
+  assert.equal(result.capped, true);
+});
 
-  assert.deepEqual(asked.docs, ['listGoogleDocs']);
-  assert.deepEqual(asked.drive, ['deleteFile']);
+test('sweepScratchEvents deletes stale scratch events only', async () => {
+  const deleted: string[] = [];
+  const stale = scratchTitle('createEvent-zero', Date.now() - 60 * 60 * 1000);
+  const calendar = fake('fake-calendar', {
+    listEvents: () =>
+      `Found 3 event(s):\n\n1. **${stale}**\n   ID: ev-old\n\n` +
+      `2. **${scratchTitle('createEvent-zero')}**\n   ID: ev-fresh\n\n3. **Team sync**\n   ID: ev-human\n`,
+    deleteEvent: (args) => {
+      assert.equal(args.sendUpdates, 'none');
+      deleted.push(String(args.eventId));
+      return 'Event deleted.';
+    },
+  });
+
+  const result = await sweepScratchEvents(calendar, { calendarId: 'primary', maxAgeHours: 0.5 });
+  assert.deepEqual(deleted, ['ev-old']);
+  assert.equal(result.kept, 2);
+  assert.equal(result.capped, false);
+});
+
+test('a negative or NaN sweep age is refused, not turned into a future cutoff', () => {
+  assert.throws(() => sweepCutoff(-1), /non-negative/);
+  assert.throws(() => sweepCutoff(Number.NaN), /non-negative/);
+});
+
+test('createdEventId reads the ID line of createEvent\'s reply', () => {
+  assert.equal(createdEventId('Event created successfully!\n**Title:** x\n**ID:** abc123\n**Status:** confirmed'), 'abc123');
+  assert.equal(createdEventId(undefined), undefined);
 });
 
 // The live-client tier's whole value rests on this detector, and a detector that
@@ -175,4 +210,14 @@ test('findReportedFailure is case-insensitive and takes extra phrases', () => {
   assert.equal(findReportedFailure('the connector is not configured'), null);
   assert.notEqual(findReportedFailure('the connector is not configured', ['not configured']), null);
   assert.notEqual(findReportedFailure('no connector present', [/no connector/i]), null);
+});
+
+test('checkFixtureTaskRow ties the needle and home list to the fixture task row', () => {
+  const row = (id: string, name: string, list: string) => `Task: ${name}\n  ID: ${id}\n  Status: open\n  List: Home (${list})`;
+  const opts = { taskId: 't1', listId: 'L1', needle: 'NEEDLE-7' };
+  assert.equal(checkFixtureTaskRow([row('t0', 'other', 'L1'), row('t1', 'NEEDLE-7 fixture', 'L1')].join('\n\n'), opts), undefined);
+  // The needle on ANOTHER task no longer satisfies the check.
+  assert.match(checkFixtureTaskRow([row('t0', 'NEEDLE-7 copy', 'L1'), row('t1', 'renamed', 'L1')].join('\n\n'), opts) ?? '', /named "Task: renamed"/);
+  assert.match(checkFixtureTaskRow(row('t2', 'NEEDLE-7', 'L1'), opts) ?? '', /no task row has ID t1/);
+  assert.match(checkFixtureTaskRow(row('t1', 'NEEDLE-7', 'L9'), opts) ?? '', /home list L1/);
 });
