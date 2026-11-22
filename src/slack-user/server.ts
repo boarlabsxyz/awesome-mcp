@@ -29,8 +29,8 @@ import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { guardFileByShares, registerSlackWorkspaceTools } from '../slack/workspaceTools.js';
 import { resolveDmUsers, formatMessage, formatTimestamp, getWorkspaceUrl } from '../slack/helpers.js';
 import {
-  scanUnread, findFirstUnread, readCursor, markRead, markUnreadFrom, isRateLimited,
-  NEVER_READ, FIRST_UNREAD_MAX_PAGES, FIRST_UNREAD_PAGE_SIZE, type MarkOutcome, type ScanSource,
+  scanUnread, findFirstUnread, readCursor, markRead, markUnreadFrom, serializeMark, isRateLimited,
+  NEVER_READ, FIRST_UNREAD_MAX_PAGES, type MarkOutcome, type ScanSource,
 } from './readState.js';
 
 export const slackUserServer = instrumentServer(new FastMCP<UserSession>({
@@ -171,14 +171,17 @@ async function buildChannelFilter(client: SlackClient, session: UserSession): Pr
  * read would reject. The extra lookups only fire when allowedOrgs/
  * blacklistUsers are configured. A UserError means denied; anything else
  * (channel gone, API blip) also fails closed — better a missing result than a
- * leaked one.
+ * leaked one. A rate limit on the member lookups is rethrown so the unread scan
+ * can stop and resume at this conversation; buildChannelFilter's own catch
+ * still turns it into a denial for search.
  */
 async function passesAllRules(client: SlackClient, rules: SlackAccessRules, meta: ChannelMeta): Promise<boolean> {
   try {
     assertAccess(rules, meta);
     await assertDmMemberAccess(client, rules, meta, meta.id);
     return true;
-  } catch {
+  } catch (err) {
+    if (isRateLimited(err)) throw err;
     return false;
   }
 }
@@ -734,7 +737,11 @@ function describeCursor(lastRead: string | null): string {
 }
 
 /** Confirmation is three-valued: Slack answers ok to a mark it did not apply as readily as to one it did. */
-function renderMarkOutcome(channelId: string, outcome: MarkOutcome, done: string): string {
+export function renderMarkOutcome(channelId: string, outcome: MarkOutcome, done: string): string {
+  return `${markOutcomeLine(channelId, outcome, done)}\n${THREADS_NOTE}`;
+}
+
+function markOutcomeLine(channelId: string, outcome: MarkOutcome, done: string): string {
   if (outcome.alreadyDone) return `Nothing to change in ${channelId}: ${done} already (read cursor: ${describeCursor(outcome.before)}).`;
   if (outcome.confirmed === true) return `Done: ${done} in ${channelId}. Read cursor: ${describeCursor(outcome.before)} → ${describeCursor(outcome.after)}.`;
   if (outcome.confirmed === false) {
@@ -841,11 +848,14 @@ slackUserServer.addTool({
     }
 
     const header = `${args.channelId} — read up to ${describeCursor(lastRead)}.`;
+    const stopped = scan.rateLimited
+      ? 'Slack\'s rate limit stopped the scan'
+      : `the scan stopped after ${FIRST_UNREAD_MAX_PAGES} pages of history`;
     if (scan.messages.length === 0) {
       // Only a complete scan proves there is nothing unread.
       return scan.complete
         ? `${header}\nNo unread messages. ${THREADS_NOTE}`
-        : `${header}\nNo unread messages from others in the ${FIRST_UNREAD_MAX_PAGES * FIRST_UNREAD_PAGE_SIZE} messages scanned, but more history follows the read cursor and was not scanned.`;
+        : `${header}\nNo unread messages from others in the ${scan.scanned} message(s) scanned, but ${stopped} and more history after the read cursor was not scanned.\n${THREADS_NOTE}`;
     }
 
     const userNames = await resolveUsers(client, scan.messages.flatMap(m => (m.user ? [m.user] : [])), tokenKey);
@@ -854,7 +864,7 @@ slackUserServer.addTool({
     const total = scan.complete ? `${scan.unreadSeen} unread message(s) in total.` : `At least ${scan.unreadSeen} unread message(s).`;
     const caveat = scan.complete
       ? ''
-      : `\nThe scan stopped after ${FIRST_UNREAD_MAX_PAGES} pages of history, so an earlier unread message may exist: these are the earliest found, not proven first.`;
+      : `\nThe scan was partial (${stopped}), so an earlier unread message may exist: these are the earliest found, not proven first.`;
     const title = scan.messages.length === 1 ? 'First unread message' : `First ${scan.messages.length} unread messages`;
     return `${header}\n${title}${scan.complete ? '' : ' found'}:\n\n${lines.join('\n')}\n\n---\n${total}${caveat}\n${THREADS_NOTE}`;
   },
@@ -872,7 +882,7 @@ slackUserServer.addTool({
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
     log.info(`Marking ${args.channelId} read up to ${args.ts ?? 'newest'}`);
-    const outcome = await markRead(client, args.channelId, args.ts);
+    const outcome = await serializeMark(`${getTokenKey(session!)}:${args.channelId}`, () => markRead(client, args.channelId, args.ts));
     return renderMarkOutcome(args.channelId, outcome, `read up to ${args.ts ? `ts ${args.ts}` : 'the newest message'}`);
   },
 });
@@ -889,7 +899,7 @@ slackUserServer.addTool({
     const client = getSlackUserClient(session);
     await enforceAccess(client, session!, args.channelId);
     log.info(`Marking ${args.channelId} unread from ${args.ts}`);
-    const outcome = await markUnreadFrom(client, args.channelId, args.ts);
+    const outcome = await serializeMark(`${getTokenKey(session!)}:${args.channelId}`, () => markUnreadFrom(client, args.channelId, args.ts));
     return renderMarkOutcome(args.channelId, outcome, `unread from ts ${args.ts}`);
   },
 });

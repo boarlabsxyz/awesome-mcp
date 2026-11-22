@@ -82,6 +82,10 @@ export interface FirstUnreadScan {
   unreadSeen: number;
   /** Every message after the cursor was scanned, so `messages` really are the first. */
   complete: boolean;
+  /** The scan stopped on Slack's rate limit after at least one page (so `complete` is false). */
+  rateLimited: boolean;
+  /** Messages fetched after the cursor, own ones included. */
+  scanned: number;
 }
 
 /**
@@ -90,7 +94,11 @@ export interface FirstUnreadScan {
  * The minimum is taken over everything scanned rather than read off the first
  * or last page, so the answer does not depend on which end Slack starts from
  * when only `oldest` is given. A capped scan says so: past the cap, an earlier
- * unread may exist that was never fetched.
+ * unread may exist that was never fetched. A rate limit after the first page
+ * keeps what was collected and reports the scan as partial — under Slack's
+ * restricted history regime (15 messages, 1 call a minute) the second page is
+ * where it hits. There is no resume cursor: the answer is a minimum over the
+ * whole scan, so a resumed call could not combine with this one.
  */
 export async function findFirstUnread(
   client: SlackClient, channelId: string, lastRead: string, selfUserId: string, count: number,
@@ -98,14 +106,22 @@ export async function findFirstUnread(
   const seen: SlackHistoryMessage[] = [];
   let cursor: string | undefined;
   let pages = 0;
+  let rateLimited = false;
   do {
-    const page = await client.conversationsHistory(channelId, { limit: FIRST_UNREAD_PAGE_SIZE, oldest: lastRead, cursor });
+    let page;
+    try {
+      page = await client.conversationsHistory(channelId, { limit: FIRST_UNREAD_PAGE_SIZE, oldest: lastRead, cursor });
+    } catch (err) {
+      if (pages === 0 || !isRateLimited(err)) throw err;
+      rateLimited = true;
+      break;
+    }
     seen.push(...page.messages);
     cursor = page.has_more ? page.response_metadata?.next_cursor || undefined : undefined;
     pages++;
   } while (cursor && pages < FIRST_UNREAD_MAX_PAGES);
   const unread = unreadFor(seen, selfUserId);
-  return { messages: unread.slice(0, count), unreadSeen: unread.length, complete: !cursor };
+  return { messages: unread.slice(0, count), unreadSeen: unread.length, complete: !cursor && !rateLimited, rateLimited, scanned: seen.length };
 }
 
 /** A fresh (uncached) read cursor plus the metadata the access rules judge. */
@@ -123,6 +139,39 @@ export interface MarkOutcome {
   confirmed: boolean | null;
   /** The cursor already satisfied the request, so Slack was not called. */
   alreadyDone: boolean;
+}
+
+/**
+ * The cursor after a mark Slack has already accepted. A failed re-read must
+ * not throw: the write happened, so the caller is owed an unconfirmed outcome
+ * rather than an error that reads as "nothing changed".
+ */
+async function rereadCursor(client: SlackClient, channelId: string): Promise<string | null> {
+  try {
+    return (await readCursor(client, channelId)).lastRead;
+  } catch {
+    return null;
+  }
+}
+
+const markQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Run marks on the same key one at a time, so each decides from the cursor the
+ * previous one left — otherwise a mark that read the cursor before another
+ * moved it can drag it back and still confirm. Per process only: another
+ * replica, or the user's own Slack app, can still move the cursor in between,
+ * which the re-read then reports.
+ */
+export async function serializeMark<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = markQueues.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(fn);
+  markQueues.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (markQueues.get(key) === run) markQueues.delete(key);
+  }
 }
 
 /**
@@ -145,7 +194,7 @@ export async function markRead(client: SlackClient, channelId: string, ts?: stri
     return { requested: null, before, after: before, confirmed: true, alreadyDone: true };
   }
   await client.conversationsMark(channelId, target);
-  const { lastRead: after } = await readCursor(client, channelId);
+  const after = await rereadCursor(client, channelId);
   return { requested: target, before, after, confirmed: after === null ? null : compareTs(after, target) >= 0, alreadyDone: false };
 }
 
@@ -164,7 +213,7 @@ export async function markUnreadFrom(client: SlackClient, channelId: string, ts:
     return { requested: null, before, after: before, confirmed: true, alreadyDone: true };
   }
   await client.conversationsMark(channelId, target);
-  const { lastRead: after } = await readCursor(client, channelId);
+  const after = await rereadCursor(client, channelId);
   return { requested: target, before, after, confirmed: after === null ? null : compareTs(after, ts) < 0, alreadyDone: false };
 }
 
@@ -215,7 +264,9 @@ export interface UnreadScan {
  * Check up to `max` conversations for unreads: one conversations.info for the
  * cursor and the rule metadata, then — only if the rules allow the
  * conversation — one history probe. A denied conversation is never read and
- * only counted. `allow` must fail closed.
+ * only counted. `allow` must fail closed, except that it rethrows a rate
+ * limit: that stops the scan with a cursor at this conversation instead of
+ * counting it hidden and skipping it for good.
  */
 export async function scanUnread(
   client: SlackClient,

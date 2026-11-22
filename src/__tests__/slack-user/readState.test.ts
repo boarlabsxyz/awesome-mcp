@@ -3,8 +3,9 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import { SlackClient } from '../../slack/apiHelpers.js';
 import {
   tsToMicros, microsToTs, compareTs, probeVerdict, findFirstUnread, markRead, markUnreadFrom,
-  scanUnread, encodeScanCursor, decodeScanCursor, NEVER_READ, UNREAD_PROBE_LIMIT, FIRST_UNREAD_MAX_PAGES,
+  scanUnread, encodeScanCursor, decodeScanCursor, serializeMark, NEVER_READ, UNREAD_PROBE_LIMIT, FIRST_UNREAD_MAX_PAGES,
 } from '../../slack-user/readState.js';
+import { renderMarkOutcome } from '../../slack-user/server.js';
 
 // A stateful fake of the Slack methods the read-state code calls. History is
 // served newest first, as conversations.history does without `oldest`; the
@@ -143,6 +144,28 @@ describe('findFirstUnread', () => {
     assert.equal(scan.complete, false);
     assert.equal(callsTo('conversations.history').length, FIRST_UNREAD_MAX_PAGES);
   });
+
+  it('keeps what it collected when a later page is rate-limited, and says the scan was partial', async () => {
+    const many = Array.from({ length: 205 }, (_, i) => [`${1000 + i}.0`, 'UA'] as [string, string]);
+    channels.C1 = { name: 'busy', lastRead: NEVER_READ, messages: msgs(...many) };
+    const realFetch = globalThis.fetch;
+    let historyCalls = 0;
+    globalThis.fetch = (async (url: string, init: any) => {
+      if (String(url).endsWith('conversations.history') && ++historyCalls > 1) return respond({}, 429);
+      return realFetch(url, init);
+    }) as any;
+    const scan = await findFirstUnread(client(), 'C1', NEVER_READ, SELF, 1);
+    assert.equal(scan.rateLimited, true);
+    assert.equal(scan.complete, false);
+    assert.equal(scan.scanned, 200);
+    assert.equal(scan.messages.length, 1);
+  });
+
+  it('still fails when the very first page is rate-limited, since nothing was scanned', async () => {
+    channels.C1 = { name: 'general', lastRead: NEVER_READ, messages: msgs(['101.0', 'UA']) };
+    rateLimited.add('conversations.history');
+    await assert.rejects(() => findFirstUnread(client(), 'C1', NEVER_READ, SELF, 1), /rate limit/);
+  });
 });
 
 describe('markRead', () => {
@@ -174,6 +197,42 @@ describe('markRead', () => {
     markIsNoop = true;
     const out = await markRead(client(), 'C1');
     assert.equal(out.confirmed, null);
+  });
+
+  it('reports a failed re-read after an accepted mark as unconfirmed instead of throwing', async () => {
+    channels.C1 = { name: 'general', lastRead: '100.000000', messages: msgs(['105.0', 'UA']) };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init: any) => {
+      if (String(url).endsWith('conversations.info') && callsTo('conversations.mark').length > 0) {
+        return respond({ ok: false, error: 'internal_error' });
+      }
+      return realFetch(url, init);
+    }) as any;
+    const out = await markRead(client(), 'C1');
+    assert.equal(channels.C1.lastRead, '105.0', 'the mark itself went through');
+    assert.equal(out.after, null);
+    assert.equal(out.confirmed, null);
+  });
+
+  it('runs concurrent marks on one conversation in turn, so none drags the cursor back', async () => {
+    channels.C1 = { name: 'general', lastRead: '100.000000', messages: msgs(['200.0', 'UA'], ['300.0', 'UA']) };
+    const key = 'xoxp-test:C1';
+    const [later, earlier] = await Promise.all([
+      serializeMark(key, () => markRead(client(), 'C1', '300.0')),
+      serializeMark(key, () => markRead(client(), 'C1', '200.0')),
+    ]);
+    assert.equal(later.confirmed, true);
+    assert.equal(earlier.alreadyDone, true, 'the second mark saw the cursor the first one left');
+    assert.equal(channels.C1.lastRead, '300.0');
+  });
+
+  it('keeps serializing after a mark on the same key fails', async () => {
+    const order: string[] = [];
+    const failing = serializeMark('k', async () => { order.push('a'); throw new Error('boom'); });
+    const next = serializeMark('k', async () => { order.push('b'); return 'ok'; });
+    await assert.rejects(failing, /boom/);
+    assert.equal(await next, 'ok');
+    assert.deepEqual(order, ['a', 'b']);
   });
 
   it('refuses when Slack writes are disabled, before calling Slack', async () => {
@@ -255,6 +314,19 @@ describe('scanUnread', () => {
     assert.deepEqual(decodeScanCursor(scan.nextCursor), { o: 1 });
   });
 
+  it('stops, rather than hiding the conversation, when the rules check is rate-limited', async () => {
+    channels.C1 = { name: 'c1', lastRead: '100.0', messages: msgs(['101.0', 'UA']) };
+    channels.C2 = { name: 'c2', lastRead: '100.0', messages: msgs(['101.0', 'UA']) };
+    const allow = async (meta: { id: string }) => {
+      if (meta.id === 'C2') throw new Error('Slack rate limit exceeded. Try again in a moment.');
+      return true;
+    };
+    const scan = await scanUnread(client(), { source: { kind: 'ids', ids: ['C1', 'C2'] }, max: 10, selfUserId: SELF, allow });
+    assert.equal(scan.hidden, 0);
+    assert.equal(scan.rateLimited, true);
+    assert.deepEqual(decodeScanCursor(scan.nextCursor), { o: 1 });
+  });
+
   it('reports a conversation without a read cursor as unknown, not as read', async () => {
     channels.C1 = { name: 'notmember', messages: msgs(['101.0', 'UA']) };
     const scan = await scanUnread(client(), { source: { kind: 'ids', ids: ['C1'] }, max: 10, selfUserId: SELF, allow: allowAll });
@@ -265,5 +337,25 @@ describe('scanUnread', () => {
   it('rejects a cursor it did not issue', () => {
     assert.throws(() => decodeScanCursor('not-a-cursor'), /Invalid cursor/);
     assert.throws(() => decodeScanCursor(encodeScanCursor({ o: -1 })), /Invalid cursor/);
+  });
+});
+
+describe('renderMarkOutcome', () => {
+  // Marks are channel-level; a bare "Done" would read as covering threads too.
+  const base = { requested: '2.0', before: '1.0', after: '2.0', alreadyDone: false };
+  for (const [label, outcome] of [
+    ['done', { ...base, confirmed: true }],
+    ['not done', { ...base, confirmed: false }],
+    ['unconfirmed', { ...base, after: null, confirmed: null }],
+    ['already done', { ...base, requested: null, confirmed: true, alreadyDone: true }],
+  ] as const) {
+    it(`says threads are not covered when ${label}`, () => {
+      assert.match(renderMarkOutcome('C1', outcome, 'read'), /Thread replies are not covered/);
+    });
+  }
+
+  it('tells the caller an ignored mark is NOT done and an unreadable one is unconfirmed', () => {
+    assert.match(renderMarkOutcome('C1', { ...base, confirmed: false }, 'read'), /NOT done/);
+    assert.match(renderMarkOutcome('C1', { ...base, after: null, confirmed: null }, 'read'), /unconfirmed/);
   });
 });
