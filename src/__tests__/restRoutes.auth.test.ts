@@ -217,6 +217,18 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   // Drive upload. '/api/v1/drive/files' is in both arrays: GET searches, POST uploads.
   '/api/v1/drive/files',
   '/api/v1/drive/upload-sessions',
+  // Drive writes (DRIVE_WRITE_ROUTES). /files/file-123/permissions is in both
+  // arrays: GET lists the permissions, POST shares.
+  '/api/v1/drive/folders',
+  '/api/v1/drive/templates/tpl-123/documents',
+  '/api/v1/drive/files/file-123/copy',
+  '/api/v1/drive/files/file-123/move',
+  '/api/v1/drive/files/file-123/rename',
+  '/api/v1/drive/files/file-123/trash',
+  '/api/v1/drive/files/file-123/permissions',
+  // Slides writes (SLIDES_WRITE_ROUTES).
+  '/api/v1/slides',
+  '/api/v1/slides/presentation-123/batchUpdate',
   // Storage. /find is a READ served over POST (the where conditions).
   '/api/v1/storage/collections/people/find',
   '/api/v1/storage/collections/people/records',

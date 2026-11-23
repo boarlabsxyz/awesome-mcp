@@ -111,6 +111,13 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listDriveChanges` | `GET /api/v1/drive/changes` | live | Follow the Drive change feed — _Without pageToken returns startPageToken and no changes: the feed only records what happens after a token is issued. nextPageToken means more now; newStartPageToken means poll later with it._ |
 | `createDriveUploadSession` | `POST /api/v1/drive/upload-sessions` | live | Open a resumable upload for a large file; returns the URL to PUT it to — _Answers 201 with uploadUrl. PUT the bytes there (no bearer needed; no size limit of ours), and the PUT response is the new file. The URL alone authorizes that one upload for about a week, so keep it private. convertTo is checked against what Drive can import. Not destructive: nothing exists until the bytes arrive, and the permanent dashboard key can already upload through POST /api/v1/drive/files, so it is accepted here too._ |
 | `uploadDriveFile` | `POST /api/v1/drive/files` | live | Upload a file, optionally converting it to a Google Doc, Sheet or Slides — _Body limit 5mb, so about 3.7 MB of file as base64 (the MCP tool takes up to 20 MB). Not idempotent: each call creates another file. convertTo is checked against what Drive can import, since Drive silently keeps an unconvertible upload as the original type._ |
+| `createFolder` | `POST /api/v1/drive/folders` | live | Create a folder — _Answers 200 with the new folder (id, name, parents, webViewLink, driveId): it was served before it was catalogued and keeps that status. Not idempotent: each call creates another folder._ |
+| `createFromTemplate` | `POST /api/v1/drive/templates/{templateId}/documents` | live | Create a Google Doc from a template, replacing placeholder text — _Google Docs templates only: any other type is a 400, before anything is copied. Without parentFolderId the document goes to My Drive root. Answers 201 with the new document even when the replacements fail: replacements is null (none sent), applied true with occurrencesChanged per placeholder (0 means not found), or applied false with the error. Matching ignores case._ |
+| `copyFile` | `POST /api/v1/drive/files/{fileId}/copy` | live | Copy a file — _Answers 200 with the copy (id, name, webViewLink, driveId): it was served before it was catalogued and keeps that status. Without parentFolderId the copy goes where the original is._ |
+| `moveFile` | `POST /api/v1/drive/files/{fileId}/move` | live | Move a file or folder to another folder — _Send removeFromAllParents true to move: 200 with action moved. It defaults to false, which copies the file into the destination and leaves the original (Drive allows one parent per item): 201 with action copied. Folders cannot be copied, so a folder needs true._ |
+| `renameFile` | `POST /api/v1/drive/files/{fileId}/rename` | live | Rename a file or folder |
+| `deleteFile` | `POST /api/v1/drive/files/{fileId}/trash` | live | Move a file or folder to the trash — _Destructive, exposed with explicit sign-off: the permanent dashboard API key can trash anything the connection can edit, a folder with its contents. Trash only, restorable from Drive; skipTrash is refused with 400. Answers 200 with trashed true as Drive reports it, or 502 if Drive did not trash it._ |
+| `shareDriveFile` | `POST /api/v1/drive/files/{fileId}/permissions` | live | Share a file or folder by granting a permission — _Exposed with explicit sign-off: the permanent dashboard API key can grant access to anyone, including type anyone (a public link) and other domains. Emails user and group grantees unless sendNotification is false. Answers 201 with the permission and the file name and link._ |
 | `getDocumentInfo` | `GET /api/v1/drive/files/{fileId}` | live | Get file metadata |
 | `getFilePermissions` | `GET /api/v1/drive/files/{fileId}/permissions` | live | List permissions on a file |
 | `checkPublicAccess` | `GET /api/v1/drive/files/{fileId}/public` | live | Check if a file is publicly accessible |
@@ -145,6 +152,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
+| `createPresentation` | `POST /api/v1/slides` | live | Create a presentation — _Answers 200 with presentationId and title: it was served before it was catalogued and keeps that status. title defaults to Untitled Presentation. Not idempotent: each call creates another deck._ |
+| `batchUpdatePresentation` | `POST /api/v1/slides/{presentationId}/batchUpdate` | live | Apply Slides API requests to a presentation in one atomic batch — _Destructive, exposed with explicit sign-off: requests can delete slides, page elements and text (deleteObject, deleteText), and the permanent dashboard API key can send them. All or nothing. Pass requiredRevisionId from a read: if the deck changed since, nothing is written, and the answer is 409 when Google names the revision in its error (400 otherwise). An empty requests list is a 400. Body limit 5mb._ |
 | `getPresentation` | `GET /api/v1/slides/{presentationId}` | live | Get presentation metadata |
 | `getPage` | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}` | live | Get a slide page |
 | `getPageThumbnail` | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail` | live | Get a slide thumbnail (PNG URL) |
@@ -521,4 +530,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 397 endpoints.
+Catalog size: 406 endpoints.

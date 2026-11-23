@@ -583,16 +583,17 @@ describe('handleCreateDocument', () => {
 
 describe('handleCreateFromTemplate', () => {
   const mockDocs = (): any => ({ documents: { batchUpdate: mock.fn(async () => ({})) } });
+  const docTemplate = () => mock.fn(async () => ({ data: { mimeType: 'application/vnd.google-apps.document' } }));
   it('creates from template without replacements', async () => {
     const drive = mkDrive({
-      files: { ...mkDrive().files, copy: mock.fn(async () => ({ data: { id: 'd1', name: 'T', webViewLink: 'l' } })) },
+      files: { ...mkDrive().files, get: docTemplate(), copy: mock.fn(async () => ({ data: { id: 'd1', name: 'T', webViewLink: 'l' } })) },
     });
     const r = await handleCreateFromTemplate(drive, mockDocs, { templateId: 'tpl', newTitle: 'T' }, noopLog);
     assert.match(r, /from template/);
   });
   it('applies replacements', async () => {
     const drive = mkDrive({
-      files: { ...mkDrive().files, copy: mock.fn(async () => ({ data: { id: 'd1', name: 'T', webViewLink: 'l', driveId: 'sd1' } })) },
+      files: { ...mkDrive().files, get: docTemplate(), copy: mock.fn(async () => ({ data: { id: 'd1', name: 'T', webViewLink: 'l', driveId: 'sd1' } })) },
     });
     const r = await handleCreateFromTemplate(
       drive, mockDocs,
@@ -603,23 +604,38 @@ describe('handleCreateFromTemplate', () => {
   });
   it('warns but succeeds when replacements fail', async () => {
     const drive = mkDrive({
-      files: { ...mkDrive().files, copy: mock.fn(async () => ({ data: { id: 'd1', name: 'T', webViewLink: 'l' } })) },
+      files: { ...mkDrive().files, get: docTemplate(), copy: mock.fn(async () => ({ data: { id: 'd1', name: 'T', webViewLink: 'l' } })) },
     });
     const failing = (): any => { throw new Error('no'); };
     const r = await handleCreateFromTemplate(drive, failing, { templateId: 'tpl', newTitle: 'T', replacements: { x: 'y' } }, noopLog);
     assert.match(r, /failed to apply/);
   });
   it('throws on 404', async () => {
-    const drive = mkDrive({ files: { ...mkDrive().files, copy: mock.fn(async () => { throw mkErr(404); }) } });
+    const drive = mkDrive({ files: { ...mkDrive().files, get: docTemplate(), copy: mock.fn(async () => { throw mkErr(404); }) } });
     await assert.rejects(handleCreateFromTemplate(drive, mockDocs, { templateId: 'tpl', newTitle: 'T' }, noopLog), /not found/);
   });
   it('throws on 403', async () => {
-    const drive = mkDrive({ files: { ...mkDrive().files, copy: mock.fn(async () => { throw mkErr(403); }) } });
+    const drive = mkDrive({ files: { ...mkDrive().files, get: docTemplate(), copy: mock.fn(async () => { throw mkErr(403); }) } });
     await assert.rejects(handleCreateFromTemplate(drive, mockDocs, { templateId: 'tpl', newTitle: 'T' }, noopLog), /Permission denied/);
   });
   it('throws on other error', async () => {
-    const drive = mkDrive({ files: { ...mkDrive().files, copy: mock.fn(async () => { throw new Error('x'); }) } });
+    const drive = mkDrive({ files: { ...mkDrive().files, get: docTemplate(), copy: mock.fn(async () => { throw new Error('x'); }) } });
     await assert.rejects(handleCreateFromTemplate(drive, mockDocs, { templateId: 'tpl', newTitle: 'T' }, noopLog), /Failed to create document from template/);
+  });
+  it('refuses a template that is not a Google Doc, before copying it', async () => {
+    const drive = mkDrive({
+      files: { ...mkDrive().files, get: mock.fn(async () => ({ data: { mimeType: 'application/pdf' } })) },
+    });
+    await assert.rejects(
+      handleCreateFromTemplate(drive, mockDocs, { templateId: 'tpl', newTitle: 'T' }, noopLog),
+      (e: any) => e instanceof UserError && /must be a Google Doc; this one is application\/pdf/.test(e.message),
+    );
+    assert.equal(drive.files.copy.mock.callCount(), 0);
+  });
+  it('puts the copy in My Drive root when no folder is given, not beside the template', async () => {
+    const drive = mkDrive({ files: { ...mkDrive().files, get: docTemplate() } });
+    await handleCreateFromTemplate(drive, mockDocs, { templateId: 'tpl', newTitle: 'T' }, noopLog);
+    assert.deepEqual(drive.files.copy.mock.calls[0].arguments[0].requestBody, { name: 'T', parents: ['root'] });
   });
 });
 
@@ -744,6 +760,11 @@ describe('handleGetFilePermissions', () => {
 });
 
 describe('handleShareDriveFile', () => {
+  it('reads the file before granting, so a failed lookup grants nothing', async () => {
+    const drive = mkDrive({ files: { ...mkDrive().files, get: mock.fn(async () => { throw mkErr(404); }) } });
+    await assert.rejects(handleShareDriveFile(drive, { fileId: 'f1', role: 'reader', type: 'anyone' }, noopLog));
+    assert.equal(drive.permissions.create.mock.callCount(), 0);
+  });
   it('shares with user', async () => {
     const drive = mkDrive({
       files: { ...mkDrive().files, get: mock.fn(async () => ({ data: { name: 'F', webViewLink: 'l' } })) },

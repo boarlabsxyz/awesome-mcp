@@ -15,6 +15,7 @@ import {
   handleBatchUpdatePresentation,
   handleListPresentationComments,
 } from './toolHandlers.js';
+import { batchUpdatePresentationSchema, createPresentationSchema } from './schemas.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 
@@ -33,10 +34,7 @@ slidesServer.addTool({
   name: 'createPresentation',
   annotations: { readOnlyHint: false },
   description: 'Create a new Google Slides presentation.',
-  parameters: z.object({
-    title: z.string().optional().default('Untitled Presentation')
-      .describe('The title of the new presentation.'),
-  }),
+  parameters: createPresentationSchema,
   execute: async (args, { log, session }) => {
     return handleCreatePresentation(getSlidesClient(session), args, log);
   },
@@ -86,12 +84,7 @@ slidesServer.addTool({
   name: 'batchUpdatePresentation',
   annotations: { readOnlyHint: false },
   description: 'Apply multiple operations to a presentation (create slides, add shapes, insert text, delete objects, etc.). Pass an array of Google Slides API request objects.',
-  parameters: z.object({
-    presentationId: z.string().describe('The ID of the presentation to update.'),
-    requests: z.array(z.record(z.any())).describe('Array of Google Slides API request objects (e.g., [{createSlide: {...}}, {insertText: {...}}]).'),
-    requiredRevisionId: z.string().min(1).optional()
-      .describe('Optional Revision ID from getPresentation. If anyone changed the presentation since, Google rejects the whole batch and nothing is written.'),
-  }),
+  parameters: batchUpdatePresentationSchema,
   execute: async (args, { log, session }) => {
     return handleBatchUpdatePresentation(getSlidesClient(session), args, log);
   },
