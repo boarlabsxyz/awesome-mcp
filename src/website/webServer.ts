@@ -6149,28 +6149,15 @@ function registerRestApiRoutes(app: express.Express): void {
   // GET /api/v1/gmail/messages - Search emails
   app.get('/api/v1/gmail/messages', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const gmail = req.userSession!.googleGmail;
-      const query = req.query.query as string || '';
-      const maxResults = parseInt(req.query.maxResults as string) || 10;
-      const pageToken = req.query.pageToken as string || undefined;
-      const listResult = await gmail.users.messages.list({
-        userId: 'me', q: query, maxResults, pageToken,
-      });
-      const messages = [];
-      for (const msg of listResult.data.messages || []) {
-        const detail = await gmail.users.messages.get({ userId: 'me', id: msg.id!, format: 'metadata', metadataHeaders: ['Subject', 'From', 'To', 'Date'] });
-        const headers = detail.data.payload?.headers || [];
-        messages.push({
-          id: msg.id, threadId: msg.threadId,
-          subject: headers.find(h => h.name === 'Subject')?.value,
-          from: headers.find(h => h.name === 'From')?.value,
-          to: headers.find(h => h.name === 'To')?.value,
-          date: headers.find(h => h.name === 'Date')?.value,
-          labelIds: detail.data.labelIds,
-          snippet: detail.data.snippet,
-        });
+      // ?q is documented, ?query is an alias, any other parameter is a 400
+      // naming the accepted ones — see src/google-gmail/restSearch.ts.
+      const { parseSearchEmailsQuery, runSearchEmails } = await import('../google-gmail/restSearch.js');
+      const parsed = parseSearchEmailsQuery(req.query as Record<string, unknown>);
+      if (!parsed.ok) {
+        res.status(400).json({ error: parsed.error });
+        return;
       }
-      res.json({ messages, nextPageToken: listResult.data.nextPageToken });
+      res.json(await runSearchEmails(req.userSession!.googleGmail, parsed.args));
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to search emails' });
     }
