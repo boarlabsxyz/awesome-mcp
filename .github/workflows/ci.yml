@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [main]
 
+# tsc needs ~2.2 GB of heap for this project, right at Node 20's default limit
+# on some runners, so `npm run build` intermittently dies with "JavaScript heap
+# out of memory" (PR #260 hit it twice on a commit that built fine elsewhere).
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
 jobs:
   lint:
     runs-on: ubuntu-latest
