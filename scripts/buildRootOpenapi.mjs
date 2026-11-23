@@ -182,8 +182,11 @@ try {
       // A `?name={x}` in the catalog path is a query parameter the route reads.
       // Dropping it left the spec silent about the very parameter the catalog
       // documents (src/__tests__/restCatalog.test.ts checks they agree).
-      const queryParams = [...(rawPath.split('?')[1] ?? '').matchAll(/([A-Za-z_][A-Za-z0-9_]*)=\{[^}]+\}/g)].map(([, name]) => ({
-        name, in: 'query', required: false, schema: { type: 'string' }, description: `${summary} (catalog: ${opId}).`,
+      // On a line of its own the parameter is part of the call (sheets
+      // ?range, clickup ?workspaceId: each route answers 400 without it);
+      // merged onto another line's operation it only selects that variant.
+      const queryParams = (required) => [...(rawPath.split('?')[1] ?? '').matchAll(/([A-Za-z_][A-Za-z0-9_]*)=\{[^}]+\}/g)].map(([, name]) => ({
+        name, in: 'query', required, schema: { type: 'string' }, description: `${summary} (catalog: ${opId}).`,
       }));
       // Convert {param} placeholders to OpenAPI style (they already are).
       const existing = root.paths[pathOnly]?.[method.toLowerCase()];
@@ -191,7 +194,7 @@ try {
         // Two catalog lines can share a path (listGoogleDocs and
         // searchGoogleDocs on /api/v1/docs): the second adds its ?param to
         // the operation already there instead of being dropped.
-        for (const qp of queryParams) {
+        for (const qp of queryParams(false)) {
           const params = (existing.parameters ??= []);
           if (!params.some((p) => p.in === 'query' && p.name === qp.name)) params.push(qp);
         }
@@ -202,7 +205,7 @@ try {
       const pathParams = [...pathOnly.matchAll(/\{([^}]+)\}/g)].map(([, name]) => ({
         name, in: 'path', required: true, schema: { type: 'string' },
       }));
-      const params = [...pathParams, ...queryParams];
+      const params = [...pathParams, ...queryParams(true)];
       const isWrite = method === 'POST';
       // A stub knows only the catalog line, so it states what is true of every
       // route of its kind: a GET can negotiate text, a POST takes and returns

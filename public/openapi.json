@@ -15114,7 +15114,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Alias of q, kept for existing callers. If both are given they must be equal."
+            "description": "Alias of q, kept for existing callers. If both are non-empty they must be equal."
           },
           {
             "name": "maxResults",
@@ -36910,7 +36910,7 @@
           {
             "name": "range",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             },
@@ -37368,7 +37368,7 @@
           {
             "name": "workspaceId",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             },
@@ -37419,7 +37419,7 @@
           {
             "name": "workspaceId",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             },

@@ -39,7 +39,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Alias of q, kept for existing callers. If both are given they must be equal."
+            "description": "Alias of q, kept for existing callers. If both are non-empty they must be equal."
           },
           {
             "name": "maxResults",
