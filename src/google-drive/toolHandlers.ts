@@ -380,6 +380,8 @@ export type TemplateReplacements =
   | { applied: true; occurrencesChanged: Record<string, number> }
   | { applied: false; error: string };
 
+const GOOGLE_DOC_MIME = 'application/vnd.google-apps.document';
+
 /**
  * Copies the template, then applies the replacements. The copy is kept when
  * the replacements fail, so that outcome is reported, not thrown.
@@ -389,8 +391,16 @@ export async function performCreateFromTemplate(
   docsGetter: () => docs_v1.Docs,
   args: { templateId: string; newTitle: string; parentFolderId?: string; replacements?: Record<string, string> },
 ): Promise<{ document: drive_v3.Schema$File; replacements: TemplateReplacements | null }> {
-  const copyMetadata: drive_v3.Schema$File = { name: args.newTitle };
-  if (args.parentFolderId) copyMetadata.parents = [args.parentFolderId];
+  // Checked before copying: anything else would be copied whole and answered
+  // as a new document, with the Docs replacements failing after the fact.
+  const template = await drive.files.get({ fileId: args.templateId, supportsAllDrives: true, fields: 'mimeType' });
+  if (template.data.mimeType !== GOOGLE_DOC_MIME) {
+    throw new UserError(`The template must be a Google Doc; this one is ${template.data.mimeType || 'of unknown type'}.`);
+  }
+  // Root unless told otherwise, as the parameter promises. Left unset, Drive
+  // would put the copy beside the template and give it that folder's sharing,
+  // with the replacement text in it.
+  const copyMetadata: drive_v3.Schema$File = { name: args.newTitle, parents: [args.parentFolderId || 'root'] };
   const response = await drive.files.copy({
     fileId: args.templateId,
     supportsAllDrives: true,
@@ -434,6 +444,13 @@ export async function performShareDriveFile(
   },
 ): Promise<{ permission: drive_v3.Schema$Permission; file: drive_v3.Schema$File }> {
   validateShareArgs(args);
+  // Read first: a lookup that failed after the grant would report a share
+  // that had in fact happened as a failure.
+  const fileInfo = await drive.files.get({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    fields: 'name,webViewLink',
+  });
   const isUserOrGroup = args.type === 'user' || args.type === 'group';
   const permissionBody: drive_v3.Schema$Permission = { role: args.role, type: args.type };
   if (args.emailAddress) permissionBody.emailAddress = args.emailAddress;
@@ -446,11 +463,6 @@ export async function performShareDriveFile(
   };
   if (isUserOrGroup) createParams.sendNotificationEmail = args.sendNotification ?? true;
   const permission = await drive.permissions.create(createParams);
-  const fileInfo = await drive.files.get({
-    fileId: args.fileId,
-    supportsAllDrives: true,
-    fields: 'name,webViewLink',
-  });
   return { permission: permission.data, file: fileInfo.data };
 }
 
@@ -720,6 +732,7 @@ export async function handleCreateFromTemplate(
     }
     return result;
   } catch (error: any) {
+    if (error instanceof UserError) throw error;
     log.error(`Error creating document from template: ${error.message || error}`);
     if (error.code === 404) throw new UserError("Template document or parent folder not found. Check the IDs.");
     if (error.code === 403) throw new UserError("Permission denied. Make sure you have read access to the template and write access to the destination folder.");

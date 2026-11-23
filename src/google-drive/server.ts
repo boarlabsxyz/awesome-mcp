@@ -102,7 +102,7 @@ driveServer.addTool({
 driveServer.addTool({
   name: 'moveFile',
   annotations: { readOnlyHint: false },
-  description: 'Moves a file or folder to a different location in Google Drive (works with shared drives).',
+  description: 'Moves a file or folder to a different location in Google Drive (works with shared drives). Set removeFromAllParents to true to move it: by default the original stays where it is and a copy is put in the destination.',
   parameters: moveFileSchema,
   execute: async (args, { log, session }) => handleMoveFile(getDriveClient(session), args, log),
 });

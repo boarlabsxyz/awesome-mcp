@@ -1268,6 +1268,111 @@
       }
     },
     "/api/v1/drive/files/{fileId}/permissions": {
+      "get": {
+        "operationId": "getFilePermissions",
+        "summary": "List permissions on a file",
+        "description": "Lists who has access to a Google Drive file or folder, and with what role.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Drive file or folder ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fileId": {
+                      "type": "string"
+                    },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string"
+                          },
+                          "emailAddress": {
+                            "type": "string"
+                          },
+                          "displayName": {
+                            "type": "string"
+                          },
+                          "domain": {
+                            "type": "string"
+                          },
+                          "allowFileDiscovery": {
+                            "type": "boolean"
+                          },
+                          "deleted": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "operationId": "shareDriveFile",
         "summary": "Share a file or folder by granting a permission",
@@ -1288,50 +1393,106 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "role",
-                  "type"
-                ],
-                "properties": {
-                  "role": {
-                    "type": "string",
-                    "enum": [
-                      "reader",
-                      "writer",
-                      "commenter"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "role",
+                      "type",
+                      "emailAddress"
                     ],
-                    "description": "The access role to grant."
+                    "properties": {
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "reader",
+                          "writer",
+                          "commenter"
+                        ],
+                        "description": "The access role to grant."
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "user",
+                          "group"
+                        ],
+                        "description": "The type of grantee."
+                      },
+                      "emailAddress": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Email address of the user or group."
+                      },
+                      "sendNotification": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Whether to send an email notification (only for user/group shares)."
+                      },
+                      "expirationTime": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Expiration time in RFC 3339 format. Only for user/group shares on files (not folders)."
+                      }
+                    }
                   },
-                  "type": {
-                    "type": "string",
-                    "enum": [
-                      "user",
-                      "group",
-                      "domain",
-                      "anyone"
+                  {
+                    "type": "object",
+                    "required": [
+                      "role",
+                      "type",
+                      "domain"
                     ],
-                    "description": "The type of grantee."
+                    "properties": {
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "reader",
+                          "writer",
+                          "commenter"
+                        ],
+                        "description": "The access role to grant."
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "domain"
+                        ],
+                        "description": "The type of grantee."
+                      },
+                      "domain": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Domain name."
+                      }
+                    }
                   },
-                  "emailAddress": {
-                    "type": "string",
-                    "description": "Email address of the user or group (required for type user or group)."
-                  },
-                  "domain": {
-                    "type": "string",
-                    "description": "Domain name (required for type domain)."
-                  },
-                  "sendNotification": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Whether to send an email notification (only for user/group shares)."
-                  },
-                  "expirationTime": {
-                    "type": "string",
-                    "format": "date-time",
-                    "description": "Expiration time in RFC 3339 format. Only for user/group shares on files (not folders)."
+                  {
+                    "type": "object",
+                    "required": [
+                      "role",
+                      "type"
+                    ],
+                    "properties": {
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "reader",
+                          "writer",
+                          "commenter"
+                        ],
+                        "description": "The access role to grant."
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "anyone"
+                        ],
+                        "description": "The type of grantee."
+                      }
+                    }
                   }
-                }
+                ]
               }
             }
           }
@@ -1516,7 +1677,7 @@
             }
           },
           "400": {
-            "description": "Bad request - the body failed validation (issues lists the fields)",
+            "description": "Bad request - the body failed validation, or the template is not a Google Doc (checked before anything is copied)",
             "content": {
               "application/json": {
                 "schema": {

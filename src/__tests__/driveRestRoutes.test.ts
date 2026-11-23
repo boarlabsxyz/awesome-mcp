@@ -14,7 +14,10 @@ function mockClients(files: Record<string, any> = {}, docs: Record<string, any> 
   return {
     googleDrive: {
       files: {
-        get: mock.fn(async () => ({ data: { name: 'Plan', parents: ['old-parent'] } })),
+        // A Google Doc, so it also passes as a template.
+        get: mock.fn(async () => ({
+          data: { name: 'Plan', parents: ['old-parent'], mimeType: 'application/vnd.google-apps.document' },
+        })),
         create: mock.fn(async () => ({ data: { id: 'folder-1', name: 'New', parents: ['p1'], webViewLink: 'l' } })),
         copy: mock.fn(async () => ({ data: { id: 'copy-1', name: 'Copy', webViewLink: 'l' } })),
         update: mock.fn(async () => ({ data: { id: 'file-1', name: 'Plan', trashed: true } })),
@@ -161,7 +164,9 @@ describe('createFromTemplate', () => {
       id: 'copy-1', name: 'Copy', webViewLink: 'l',
       replacements: { applied: true, occurrencesChanged: { '{{NAME}}': 3, '{{GONE}}': 0 } },
     });
-    assert.equal(clients.googleDrive.files.copy.mock.calls[0].arguments[0].fileId, 'tpl');
+    const copy = clients.googleDrive.files.copy.mock.calls[0].arguments[0];
+    assert.equal(copy.fileId, 'tpl');
+    assert.deepEqual(copy.requestBody, { name: 'Offer', parents: ['root'] });
     const requests = clients.googleDocs.documents.batchUpdate.mock.calls[0].arguments[0].requestBody.requests;
     assert.deepEqual(requests[0], { replaceAllText: { containsText: { text: '{{NAME}}', matchCase: false }, replaceText: 'Ada' } });
   });
@@ -170,6 +175,14 @@ describe('createFromTemplate', () => {
     const { body, clients } = await call('createFromTemplate', { templateId: 'tpl' }, { newTitle: 'Offer' });
     assert.equal((body as any).replacements, null);
     assert.equal(clients.googleDocs.documents.batchUpdate.mock.callCount(), 0);
+  });
+
+  it('refuses a template that is not a Google Doc with a status-less UserError, which the route answers 400', async () => {
+    const get = mock.fn(async () => ({ data: { mimeType: 'application/pdf' } }));
+    await assert.rejects(
+      call('createFromTemplate', { templateId: 'tpl' }, { newTitle: 'Offer' }, mockClients({ get })),
+      (e: any) => e.name === 'UserError' && e.code === undefined,
+    );
   });
 
   it('still answers 201 when the replacements fail, saying so', async () => {
@@ -188,7 +201,8 @@ describe('share', () => {
       'shareDriveFile', { fileId: 'file-1' }, { role: 'reader', type: 'user', emailAddress: 'a@b.c' },
     );
     assert.equal(status, 201);
-    assert.deepEqual(body, { permission: { id: 'perm-1', type: 'user', role: 'reader' }, file: { name: 'Plan', parents: ['old-parent'] } });
+    assert.deepEqual((body as any).permission, { id: 'perm-1', type: 'user', role: 'reader' });
+    assert.equal((body as any).file.name, 'Plan');
     const req = clients.googleDrive.permissions.create.mock.calls[0].arguments[0];
     assert.equal(req.fileId, 'file-1');
     assert.deepEqual(req.requestBody, { role: 'reader', type: 'user', emailAddress: 'a@b.c' });

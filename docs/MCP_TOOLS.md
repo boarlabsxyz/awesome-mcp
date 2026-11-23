@@ -135,7 +135,7 @@ Source: `src/google-drive/server.ts` — 19 tools.
 | `createFolder` | Creates a new folder in Google Drive or a shared drive. | `POST /api/v1/drive/folders` |
 | `listFolderContents` | Lists the contents of a specific folder in Google Drive or a shared drive. | `GET /api/v1/drive/folders/{folderId}/contents` |
 | `getFolderInfo` | Gets detailed information about a specific folder in Google Drive or a shared drive. | `GET /api/v1/drive/folders/{folderId}` |
-| `moveFile` | Moves a file or folder to a different location in Google Drive (works with shared drives). | `POST /api/v1/drive/files/{fileId}/move` |
+| `moveFile` | Moves a file or folder to a different location in Google Drive (works with shared drives). Set removeFromAllParents to true to move it: by default the original stays where it is and a copy is put in the destination. | `POST /api/v1/drive/files/{fileId}/move` |
 | `copyFile` | Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead. | `POST /api/v1/drive/files/{fileId}/copy` |
 | `renameFile` | Renames a file or folder in Google Drive (works with shared drives). | `POST /api/v1/drive/files/{fileId}/rename` |
 | `deleteFile` | Deletes a file or folder from Google Drive (works with shared drives): moves it to the trash, where it can be restored, or with skipTrash deletes it permanently. | `POST /api/v1/drive/files/{fileId}/trash` |

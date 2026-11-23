@@ -79,6 +79,16 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "The JSON body is over the 5 MB limit; split the batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -216,7 +226,7 @@
       "post": {
         "operationId": "batchUpdatePresentation",
         "summary": "Batch update a presentation",
-        "description": "Applies one or more updates to a presentation. Each request is validated before being applied. If any request is not valid, the entire request will fail.",
+        "description": "Applies one or more updates to a presentation. Each request is validated before being applied. If any request is not valid, the entire request will fail. The JSON body is limited to 5 MB.",
         "parameters": [
           {
             "name": "presentationId",
@@ -244,7 +254,8 @@
                       "type": "object",
                       "description": "A single update request (e.g., createSlide, insertText, deleteObject, replaceAllText)"
                     },
-                    "description": "A list of updates to apply to the presentation"
+                    "description": "A list of updates to apply to the presentation",
+                    "minItems": 1
                   },
                   "requiredRevisionId": {
                     "type": "string",
@@ -311,7 +322,17 @@
             }
           },
           "409": {
-            "description": "The presentation changed after requiredRevisionId was read; nothing was written.",
+            "description": "The presentation changed after requiredRevisionId was read; nothing was written. Sent when Google names the revision in its error; a stale pin Google words otherwise comes back as 400, also with nothing written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The JSON body is over the 5 MB limit; split the batch",
             "content": {
               "application/json": {
                 "schema": {
