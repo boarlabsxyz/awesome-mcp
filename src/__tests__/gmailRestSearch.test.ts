@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
 
-import { parseSearchEmailsQuery, runSearchEmails, SEARCH_EMAILS_QUERY_PARAMS } from '../google-gmail/restSearch.js';
+import { handleSearchEmails, parseSearchEmailsQuery, runSearchEmails, SEARCH_EMAILS_QUERY_PARAMS } from '../google-gmail/restSearch.js';
 import { REST_CATALOG } from '../restCatalog.js';
 
 function parsed(query: Record<string, unknown>) {
@@ -84,10 +84,10 @@ describe('runSearchEmails', () => {
     }));
     const gmail = { users: { messages: { list, get } } } as any;
 
-    const result = await runSearchEmails(gmail, parsed({ q: 'from:aliexpress', maxResults: '3' }));
+    const result = await runSearchEmails(gmail, parsed({ q: 'from:aliexpress', maxResults: '3', pageToken: 'page2' }));
 
     assert.equal(list.mock.callCount(), 1);
-    assert.deepEqual(list.mock.calls[0].arguments[0], { userId: 'me', q: 'from:aliexpress', maxResults: 3, pageToken: undefined });
+    assert.deepEqual(list.mock.calls[0].arguments[0], { userId: 'me', q: 'from:aliexpress', maxResults: 3, pageToken: 'page2' });
     assert.equal(get.mock.callCount(), 1);
     assert.equal(result.nextPageToken, 'next');
     assert.deepEqual(result.messages.map((m) => [m.id, m.from, m.subject]), [['m1', 'AliExpress <a@aliexpress.com>', 'Order shipped']]);
@@ -96,5 +96,29 @@ describe('runSearchEmails', () => {
   it('answers an empty list when nothing matches', async () => {
     const gmail = { users: { messages: { list: mock.fn(async () => ({ data: {} })), get: mock.fn() } } } as any;
     assert.deepEqual(await runSearchEmails(gmail, parsed({ q: 'from:nobody' })), { messages: [], nextPageToken: undefined });
+  });
+});
+
+describe('handleSearchEmails', () => {
+  function fakeGmail() {
+    const list = mock.fn(async (_params: unknown) => ({ data: { messages: [{ id: 'm1', threadId: 't1' }] } }));
+    const get = mock.fn(async () => ({ data: { payload: { headers: [{ name: 'From', value: 'a@aliexpress.com' }] } } }));
+    return { list, get, gmail: { users: { messages: { list, get } } } as any };
+  }
+
+  it('searches Gmail with the q from the query string', async () => {
+    const { list, gmail } = fakeGmail();
+    const res = await handleSearchEmails({ q: 'from:aliexpress' }, gmail);
+    assert.equal(res.status, 200);
+    assert.equal((list.mock.calls[0].arguments[0] as { q: string }).q, 'from:aliexpress');
+    assert.deepEqual((res.body as { messages: Array<{ id: string }> }).messages.map((m) => m.id), ['m1']);
+  });
+
+  it('answers 400 and never calls Gmail for a parameter it does not read', async () => {
+    const { list, gmail } = fakeGmail();
+    const res = await handleSearchEmails({ search: 'from:aliexpress' }, gmail);
+    assert.equal(res.status, 400);
+    assert.match((res.body as { error: string }).error, /search/);
+    assert.equal(list.mock.callCount(), 0);
   });
 });

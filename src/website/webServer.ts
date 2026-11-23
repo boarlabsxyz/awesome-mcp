@@ -6151,13 +6151,9 @@ function registerRestApiRoutes(app: express.Express): void {
     try {
       // ?q is documented, ?query is an alias, any other parameter is a 400
       // naming the accepted ones — see src/google-gmail/restSearch.ts.
-      const { parseSearchEmailsQuery, runSearchEmails } = await import('../google-gmail/restSearch.js');
-      const parsed = parseSearchEmailsQuery(req.query as Record<string, unknown>);
-      if (!parsed.ok) {
-        res.status(400).json({ error: parsed.error });
-        return;
-      }
-      res.json(await runSearchEmails(req.userSession!.googleGmail, parsed.args));
+      const { handleSearchEmails } = await import('../google-gmail/restSearch.js');
+      const { status, body } = await handleSearchEmails(req.query as Record<string, unknown>, req.userSession!.googleGmail);
+      res.status(status).json(body);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to search emails' });
     }
