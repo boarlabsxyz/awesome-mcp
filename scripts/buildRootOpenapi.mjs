@@ -178,14 +178,31 @@ try {
       // Strip the query-string template from the path (paths in OpenAPI are
       // the URL path only; query params belong in `parameters`).
       const pathOnly = rawPath.split('?')[0];
-      // Convert {param} placeholders to OpenAPI style (they already are).
-      if (root.paths[pathOnly]?.[method.toLowerCase()]) continue;
       if (status === 'planned') continue; // don't list endpoints that aren't wired yet
+      // A `?name={x}` in the catalog path is a query parameter the route reads.
+      // Dropping it left the spec silent about the very parameter the catalog
+      // documents (src/__tests__/restCatalog.test.ts checks they agree).
+      const queryParams = [...(rawPath.split('?')[1] ?? '').matchAll(/([A-Za-z_][A-Za-z0-9_]*)=\{[^}]+\}/g)].map(([, name]) => ({
+        name, in: 'query', required: false, schema: { type: 'string' }, description: `${summary} (catalog: ${opId}).`,
+      }));
+      // Convert {param} placeholders to OpenAPI style (they already are).
+      const existing = root.paths[pathOnly]?.[method.toLowerCase()];
+      if (existing) {
+        // Two catalog lines can share a path (listGoogleDocs and
+        // searchGoogleDocs on /api/v1/docs): the second adds its ?param to
+        // the operation already there instead of being dropped.
+        for (const qp of queryParams) {
+          const params = (existing.parameters ??= []);
+          if (!params.some((p) => p.in === 'query' && p.name === qp.name)) params.push(qp);
+        }
+        continue;
+      }
       root.paths[pathOnly] ??= {};
       // OpenAPI requires a declaration for every {param} in the path template.
       const pathParams = [...pathOnly.matchAll(/\{([^}]+)\}/g)].map(([, name]) => ({
         name, in: 'path', required: true, schema: { type: 'string' },
       }));
+      const params = [...pathParams, ...queryParams];
       const isWrite = method === 'POST';
       // A stub knows only the catalog line, so it states what is true of every
       // route of its kind: a GET can negotiate text, a POST takes and returns
@@ -200,7 +217,7 @@ try {
         summary,
         description: `${summary}. Mirrors the MCP tool \`${mcpToolName}\`. ${shape}${notes ? ` ${notes}` : ''}`,
         tags: [service],
-        ...(pathParams.length ? { parameters: pathParams } : {}),
+        ...(params.length ? { parameters: params } : {}),
         responses: isWrite
           ? {
               '2XX': { description: 'Success (JSON): 201 when the call creates something, 200 otherwise' },

@@ -74,7 +74,7 @@ export async function runSearchEmails(gmail: gmail_v1.Gmail, args: SearchEmailsA
 }
 
 /** The whole route minus Express: refuse a bad query string, else search. */
-export async function handleSearchEmails(query: Record<string, unknown>, gmail: gmail_v1.Gmail) {
+export async function handleSearchEmailsRequest(query: Record<string, unknown>, gmail: gmail_v1.Gmail) {
   const parsed = parseSearchEmailsQuery(query);
   if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
   return { status: 200, body: await runSearchEmails(gmail, parsed.args) };

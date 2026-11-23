@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { z } from 'zod';
 import {
@@ -93,5 +95,25 @@ describe('restCatalog', () => {
     it('returns null for an unknown tool', () => {
       assert.equal(restHintForTool('definitelyNotATool'), null);
     });
+  });
+
+  // The catalog said ?q for Gmail search while public/openapi.json said
+  // ?query, and the route read only ?query: a caller following either doc
+  // could be searching nothing. A `?name={x}` in a catalog path must appear as
+  // that query parameter in the published spec (rebuild it with
+  // node scripts/buildRootOpenapi.mjs).
+  describe('catalog query parameters agree with public/openapi.json', () => {
+    const spec = JSON.parse(readFileSync(join(process.cwd(), 'public', 'openapi.json'), 'utf8'));
+    for (const e of REST_CATALOG.filter((x) => x.status === 'live' && x.path.includes('?'))) {
+      const [path, qs] = e.path.split('?');
+      const names = [...qs.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=\{[^}]+\}/g)].map(([, n]) => n);
+      it(`${e.method} ${e.path}`, () => {
+        assert.ok(names.length > 0, `no {param} template in ${e.path}`);
+        const op = spec.paths?.[path]?.[e.method.toLowerCase()];
+        assert.ok(op, `public/openapi.json has no ${e.method} ${path}`);
+        const documented = (op.parameters ?? []).filter((p: { in: string }) => p.in === 'query').map((p: { name: string }) => p.name);
+        for (const n of names) assert.ok(documented.includes(n), `${e.method} ${path}: catalog documents ?${n}, openapi.json lists ${JSON.stringify(documented)}`);
+      });
+    }
   });
 });

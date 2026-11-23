@@ -26,6 +26,7 @@
 - **`/messages/send` and `/drafts` keep their old 200 and response keys** — ChatGPT Custom Actions compat routes, now validated with the tool's schema.
 - **The PATCH and DELETE on `/messages/{messageId}` stay untouched and uncatalogued** — the catalog takes only GET and POST, so `/modify` and `/trash` are the POST siblings.
 - **`batch-modify` reports `confirmed: null`** — Gmail answers 204 with no per-message result, and re-reading up to 1000 messages is not worth it.
+- **Search (`GET /messages`) takes `?q`, with `?query` as an alias, and refuses any other parameter with a 400 naming the accepted ones** (`src/google-gmail/restSearch.ts`) — it used to read only `?query`, so the documented `?q` returned recent mail unfiltered with a 200, and an ignored filter on a mail search looks like a real answer.
 - **400, 409 and 429 keep their status** (`gmailPassthroughStatus`) — `sendUpstreamError` would turn them into 500.
 
 ## Source Files
@@ -36,3 +37,4 @@
 | `src/google-gmail/schemas.ts` | Zod schemas for the write tools, shared with the REST routes |
 | `src/google-gmail/toolHandlers.ts` | `perform*` ops that throw Gmail's own errors, and the `handle*` tool bodies around them |
 | `src/google-gmail/restRoutes.ts` | `GMAIL_WRITE_ROUTES` — the REST write table, one descriptor per endpoint |
+| `src/google-gmail/restSearch.ts` | `GET /api/v1/gmail/messages` — the search route's query-string checks and Gmail call |

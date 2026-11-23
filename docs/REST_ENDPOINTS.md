@@ -123,7 +123,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `searchEmails` | `GET /api/v1/gmail/messages?q={query}` | live | Search emails |
+| `searchEmails` | `GET /api/v1/gmail/messages?q={query}` | live | Search emails — _query is accepted as an alias of q. Also takes maxResults (default 10) and pageToken. Any other query parameter, a repeated one, or q and query with different values answers 400 naming the accepted ones rather than returning unfiltered mail._ |
 | `readEmail` | `GET /api/v1/gmail/messages/{messageId}` | live | Read an email (JSON or markdown via Accept) |
 | `getAttachment` | `GET /api/v1/gmail/messages/{messageId}/attachments/{attachmentId}` | live | Download an email attachment — _Returns Gmail base64url-encoded payload as JSON {size, data}; caller decodes._ |
 | `listFilters` | `GET /api/v1/gmail/filters` | live | List Gmail filters — _Needs gmail.settings.basic: a connection made before it was added gets 403 naming Reconnect._ |
