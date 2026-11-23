@@ -357,6 +357,7 @@ import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs }
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
 import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
+import { handleSearchEmailsRequest } from '../google-gmail/restSearch.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
 import { STORAGE_REST_ROUTES, storageErrorResponse, storageRequestProblem } from '../storage/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
@@ -6151,11 +6152,14 @@ function registerRestApiRoutes(app: express.Express): void {
     try {
       // ?q is documented, ?query is an alias, any other parameter is a 400
       // naming the accepted ones — see src/google-gmail/restSearch.ts.
-      const { handleSearchEmailsRequest } = await import('../google-gmail/restSearch.js');
       const { status, body } = await handleSearchEmailsRequest(req.query as Record<string, unknown>, req.userSession!.googleGmail);
       res.status(status).json(body);
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to search emails' });
+      // Gmail's 400 (a bad pageToken or q), 409 and 429 are the caller's to act
+      // on; 403 and 404 map as on the other routes.
+      const upstream = gmailPassthroughStatus(err);
+      if (upstream) { res.status(upstream).json({ error: err.message || 'Failed to search emails' }); return; }
+      sendUpstreamError(res, err, { fallback: 'Failed to search emails' });
     }
   });
 

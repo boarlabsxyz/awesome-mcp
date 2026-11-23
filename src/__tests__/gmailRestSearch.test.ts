@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
 
+import { gmailPassthroughStatus } from '../google-gmail/restRoutes.js';
 import { handleSearchEmailsRequest, parseSearchEmailsQuery, runSearchEmails, SEARCH_EMAILS_QUERY_PARAMS } from '../google-gmail/restSearch.js';
 import { REST_CATALOG } from '../restCatalog.js';
 
@@ -60,7 +61,21 @@ describe('parseSearchEmailsQuery', () => {
 
   it('keeps maxResults and pageToken as before', () => {
     assert.deepEqual(parsed({ q: 'x', maxResults: '3', pageToken: 'tok' }), { q: 'x', maxResults: 3, pageToken: 'tok' });
-    assert.equal(parsed({ maxResults: 'lots' }).maxResults, 10);
+  });
+
+  it('accepts maxResults from 1 to 50, the MCP tool range, and reads an empty one as absent', () => {
+    assert.equal(parsed({ maxResults: '1' }).maxResults, 1);
+    assert.equal(parsed({ maxResults: '50' }).maxResults, 50);
+    assert.equal(parsed({ maxResults: '' }).maxResults, 10);
+  });
+
+  // These used to become 10 (or go to Gmail as 1000) and answer a plausible 200.
+  it('refuses a maxResults that is not a whole number from 1 to 50', () => {
+    for (const bad of ['0', '-5', 'lots', '10abc', '1.5', '51', '1000', ' 5']) {
+      const error = refused({ maxResults: bad });
+      assert.match(error, /maxResults must be a whole number from 1 to 50/, bad);
+      assert.match(error, /\bq\b.*\bquery\b.*maxResults.*pageToken/, bad);
+    }
   });
 
   it('accepts the parameter the catalog documents', () => {
@@ -120,5 +135,25 @@ describe('handleSearchEmailsRequest', () => {
     assert.equal(res.status, 400);
     assert.match((res.body as { error: string }).error, /search/);
     assert.equal(list.mock.callCount(), 0);
+  });
+
+  it('answers 400 and never calls Gmail for an out-of-range maxResults', async () => {
+    const { list, gmail } = fakeGmail();
+    const res = await handleSearchEmailsRequest({ q: 'x', maxResults: '1000' }, gmail);
+    assert.equal(res.status, 400);
+    assert.match((res.body as { error: string }).error, /maxResults/);
+    assert.equal(list.mock.callCount(), 0);
+  });
+
+  // The route's catch keeps whatever gmailPassthroughStatus keeps, so a bad
+  // pageToken is the caller's 400, not a 500.
+  it('lets an upstream 400 reach the route with its status intact', async () => {
+    const upstream = Object.assign(new Error('Invalid pageToken'), { code: 400 });
+    const gmail = { users: { messages: { list: mock.fn(async () => { throw upstream; }), get: mock.fn() } } } as any;
+    await assert.rejects(handleSearchEmailsRequest({ q: 'x', pageToken: 'garbage' }, gmail), (err: unknown) => {
+      assert.equal(err, upstream);
+      assert.equal(gmailPassthroughStatus(err), 400);
+      return true;
+    });
   });
 });

@@ -15096,7 +15096,7 @@
       "get": {
         "operationId": "searchEmails",
         "summary": "Search emails",
-        "description": "Searches for emails matching q, in Gmail search syntax. Omit q for the most recent mail. Any query parameter other than q, query, maxResults and pageToken, a repeated parameter, or q and query with different values answers 400 naming the accepted parameters, rather than returning unfiltered mail.",
+        "description": "Searches for emails matching q, in Gmail search syntax. Omit q for the most recent mail. Any query parameter other than q, query, maxResults and pageToken, a repeated parameter, q and query with different values, or a maxResults that is not a whole number from 1 to 50 answers 400 naming the accepted parameters, rather than returning unfiltered mail. A Gmail 400 (for example an invalid pageToken), 409 or 429 keeps its status.",
         "parameters": [
           {
             "name": "q",
@@ -15124,9 +15124,9 @@
               "type": "integer",
               "default": 10,
               "minimum": 1,
-              "maximum": 500
+              "maximum": 50
             },
-            "description": "Maximum number of messages to return"
+            "description": "Maximum number of messages to return, 1 to 50"
           },
           {
             "name": "pageToken",

@@ -381,6 +381,14 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
       assert.match(res.body.error, /\bq\b/);
     });
 
+    it('refuses a maxResults outside 1-50 instead of coercing or forwarding it', async () => {
+      for (const bad of ['0', 'abc', '1000']) {
+        const res = await request(app).get(`/api/v1/gmail/messages?q=x&maxResults=${bad}`).set(auth());
+        assert.equal(res.status, 400, `maxResults=${bad}: ${JSON.stringify(res.body)}`);
+        assert.match(res.body.error, /maxResults must be a whole number from 1 to 50/);
+      }
+    });
+
     it('accepts a message body past the global 100 kb limit', async () => {
       const res = await request(app).post('/api/v1/gmail/messages/send').set(auth())
         .send({ to: 'bad\nline', subject: 'Hi', body: 'x'.repeat(300_000) });

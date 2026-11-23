@@ -11,7 +11,10 @@ import type { gmail_v1 } from 'googleapis';
 
 export const SEARCH_EMAILS_QUERY_PARAMS = ['q', 'query', 'maxResults', 'pageToken'] as const;
 
-const ACCEPTED = 'Accepted: q (Gmail search, e.g. from:someone), query (alias of q), maxResults, pageToken.';
+const ACCEPTED = 'Accepted: q (Gmail search, e.g. from:someone), query (alias of q), maxResults (1-50, default 10), pageToken.';
+
+// The searchEmails MCP tool caps maxResults at 50 (server.ts); the route matches it.
+export const SEARCH_EMAILS_MAX_RESULTS = 50;
 
 export interface SearchEmailsArgs {
   q: string;
@@ -41,11 +44,18 @@ export function parseSearchEmailsQuery(query: Record<string, unknown>): SearchEm
   if (q && alias && q !== alias) {
     return { ok: false, error: `q and query are the same parameter and were given different values. Pass one. ${ACCEPTED}` };
   }
+  // parseInt would read 0, -5, abc or 10abc as 10 and answer a plausible 200;
+  // 1000 would go to Gmail and come back as its 400. An empty value is absent.
+  const rawMax = (query.maxResults as string | undefined) ?? '';
+  const maxResults = rawMax === '' ? 10 : Number(rawMax);
+  if (rawMax !== '' && (!/^[0-9]+$/.test(rawMax) || maxResults < 1 || maxResults > SEARCH_EMAILS_MAX_RESULTS)) {
+    return { ok: false, error: `maxResults must be a whole number from 1 to ${SEARCH_EMAILS_MAX_RESULTS}; got "${rawMax}". ${ACCEPTED}` };
+  }
   return {
     ok: true,
     args: {
       q: q || alias,
-      maxResults: parseInt(query.maxResults as string) || 10,
+      maxResults,
       pageToken: (query.pageToken as string | undefined) || undefined,
     },
   };
