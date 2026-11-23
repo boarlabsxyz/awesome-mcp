@@ -123,7 +123,21 @@ export async function fetchChannelMeta(
   if (cached && cached.expiresAt > Date.now()) return cached.meta;
 
   const { channel } = await client.conversationsInfo(channelId);
-  const meta: ChannelMeta = {
+  const meta = channelMetaFromInfo(channel);
+  channelMetaCache.set(cacheKey, { meta, expiresAt: Date.now() + CHANNEL_META_TTL_MS });
+  pruneChannelMetaCache(Date.now());
+  return meta;
+}
+
+/**
+ * The access-rule view of a `conversations.info` payload. Exported for callers
+ * that need the info call uncached (the read-state tools read `last_read` from
+ * the same response) but must judge it exactly as `fetchChannelMeta` would.
+ */
+export function channelMetaFromInfo(
+  channel: Awaited<ReturnType<SlackClient['conversationsInfo']>>['channel'],
+): ChannelMeta {
+  return {
     id: channel.id,
     name: channel.name,
     is_private: channel.is_private,
@@ -133,9 +147,6 @@ export async function fetchChannelMeta(
     user: channel.user,
     shared_team_ids: channelTeamIds(channel),
   };
-  channelMetaCache.set(cacheKey, { meta, expiresAt: Date.now() + CHANNEL_META_TTL_MS });
-  pruneChannelMetaCache(Date.now());
-  return meta;
 }
 
 // --- Access enforcement ---

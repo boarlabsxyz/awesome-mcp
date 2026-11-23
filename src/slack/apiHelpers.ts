@@ -626,9 +626,23 @@ export class SlackClient {
       user?: string;
       topic?: { value: string }; purpose?: { value: string };
       num_members?: number;
+      /**
+       * The calling user's read cursor: every message with a later ts is
+       * unread. Returned only to a member, and only to a user token — a bot's
+       * cursor is its own. "0000000000.000000" means nothing has been read.
+       */
+      last_read?: string;
     };
   }> {
     return this.request('conversations.info', { channel });
+  }
+
+  /**
+   * Move the caller's read cursor in a conversation to `ts` — the channel-level
+   * "mark as read up to here". Thread read state is not part of it.
+   */
+  async conversationsMark(channel: string, ts: string): Promise<{ ok: boolean }> {
+    return this.request('conversations.mark', { channel, ts });
   }
 
   async conversationsMembers(channel: string, cursor?: string): Promise<{
