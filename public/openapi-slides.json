@@ -23,15 +23,15 @@
         "summary": "Create a new presentation",
         "description": "Creates a new Google Slides presentation with the specified title.",
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["title"],
                 "properties": {
                   "title": {
                     "type": "string",
+                    "default": "Untitled Presentation",
                     "description": "The title of the new presentation"
                   }
                 }
@@ -51,7 +51,7 @@
             }
           },
           "400": {
-            "description": "Bad request - missing required fields",
+            "description": "Bad request - the body failed validation",
             "content": {
               "application/json": {
                 "schema": {
@@ -234,7 +234,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["requests"],
+                "required": [
+                  "requests"
+                ],
                 "properties": {
                   "requests": {
                     "type": "array",
@@ -261,10 +263,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "presentationId": {
-                      "type": "string",
-                      "description": "The ID of the updated presentation"
-                    },
                     "replies": {
                       "type": "array",
                       "items": {
@@ -283,7 +281,7 @@
             }
           },
           "400": {
-            "description": "Bad request - invalid update requests",
+            "description": "Bad request - an invalid or empty requests list, or a request Google refused",
             "content": {
               "application/json": {
                 "schema": {

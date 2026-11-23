@@ -10087,7 +10087,7 @@
     },
     "/api/v1/drive/folders": {
       "post": {
-        "operationId": "createFolder",
+        "operationId": "createDriveFolder",
         "summary": "Create a folder",
         "description": "Creates a new folder in Google Drive.",
         "requestBody": {
@@ -10617,6 +10617,706 @@
           },
           "403": {
             "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files/{fileId}/move": {
+      "post": {
+        "operationId": "moveDriveFile",
+        "summary": "Move a file or folder to another folder",
+        "description": "Moves a file or folder to a different location in Google Drive (works with shared drives). Send removeFromAllParents true to move it. It defaults to false, which leaves the original where it is and puts a copy in the destination (Drive allows one parent per item, and folders cannot be copied).",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Drive file or folder ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "newParentId"
+                ],
+                "properties": {
+                  "newParentId": {
+                    "type": "string",
+                    "description": "ID of the destination folder. Use \"root\" for Drive root. For shared drives, use a folder ID within the shared drive."
+                  },
+                  "removeFromAllParents": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true, moves the item: removes it from all current parents. If false, leaves the original where it is and puts a copy in the destination."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Moved (action is moved)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/File"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "action": {
+                          "type": "string",
+                          "enum": [
+                            "moved"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Copied into the destination (action is copied); the original is unchanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/File"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "action": {
+                          "type": "string",
+                          "enum": [
+                            "copied"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - the body failed validation (issues lists the fields)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File or destination folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files/{fileId}/rename": {
+      "post": {
+        "operationId": "renameDriveFile",
+        "summary": "Rename a file or folder",
+        "description": "Renames a file or folder in Google Drive (works with shared drives).",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Drive file or folder ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "newName"
+                ],
+                "properties": {
+                  "newName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "New name for the file or folder."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed; the file with its new name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/File"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - the body failed validation (issues lists the fields)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files/{fileId}/trash": {
+      "post": {
+        "operationId": "trashDriveFile",
+        "summary": "Move a file or folder to the trash",
+        "description": "Moves a file or folder (with its contents) to the Drive trash, where it can be restored. This endpoint never deletes permanently: skipTrash true is refused with 400. Destructive, exposed with explicit sign-off: the permanent dashboard API key can call it.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Drive file or folder ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "skipTrash": {
+                    "type": "boolean",
+                    "enum": [
+                      false
+                    ],
+                    "description": "Not accepted as true here: this endpoint only moves to the trash."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "In the trash, as Drive reports it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "trashed": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - the body failed validation (issues lists the fields)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Drive accepted the request but did not report the file as trashed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/drive/files/{fileId}/permissions": {
+      "post": {
+        "operationId": "shareDriveFile",
+        "summary": "Share a file or folder by granting a permission",
+        "description": "Shares a Google Drive file or folder by creating a permission. Required fields by type: user or group need emailAddress; domain needs domain; anyone (a public link) needs neither. Emails user and group grantees unless sendNotification is false. Exposed with explicit sign-off: the permanent dashboard API key can call it.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Drive file or folder ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "role",
+                  "type"
+                ],
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "reader",
+                      "writer",
+                      "commenter"
+                    ],
+                    "description": "The access role to grant."
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "group",
+                      "domain",
+                      "anyone"
+                    ],
+                    "description": "The type of grantee."
+                  },
+                  "emailAddress": {
+                    "type": "string",
+                    "description": "Email address of the user or group (required for type user or group)."
+                  },
+                  "domain": {
+                    "type": "string",
+                    "description": "Domain name (required for type domain)."
+                  },
+                  "sendNotification": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Whether to send an email notification (only for user/group shares)."
+                  },
+                  "expirationTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Expiration time in RFC 3339 format. Only for user/group shares on files (not folders)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Permission created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "permission": {
+                      "type": "object",
+                      "description": "The permission Drive created (id, type, role)",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "file": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "webViewLink": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - the body failed validation (issues lists the fields)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getFilePermissions",
+        "summary": "List permissions on a file",
+        "description": "List permissions on a file. Mirrors the MCP tool `getFilePermissions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
+        "tags": [
+          "drive"
+        ],
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/drive/templates/{templateId}/documents": {
+      "post": {
+        "operationId": "createFromTemplate",
+        "summary": "Create a Google Doc from a template",
+        "description": "Copies a Google Docs template and replaces placeholder text in the copy (matching ignores case). Answers 201 with the new document even when the replacements fail; replacements says what happened to them.",
+        "parameters": [
+          {
+            "name": "templateId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID of the template document to copy from"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "newTitle"
+                ],
+                "properties": {
+                  "newTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title for the new document."
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive."
+                  },
+                  "replacements": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Placeholder text to replace, e.g. {\"{{NAME}}\": \"John Doe\"}."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/File"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "replacements": {
+                          "type": "object",
+                          "nullable": true,
+                          "description": "null when none were sent. applied true with occurrencesChanged per placeholder (0 means not found), or applied false with the error.",
+                          "properties": {
+                            "applied": {
+                              "type": "boolean"
+                            },
+                            "occurrencesChanged": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "integer"
+                              }
+                            },
+                            "error": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - the body failed validation (issues lists the fields)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template or parent folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -35834,17 +36534,15 @@
         "summary": "Create a new presentation",
         "description": "Creates a new Google Slides presentation with the specified title.",
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "title"
-                ],
                 "properties": {
                   "title": {
                     "type": "string",
+                    "default": "Untitled Presentation",
                     "description": "The title of the new presentation"
                   }
                 }
@@ -35864,7 +36562,7 @@
             }
           },
           "400": {
-            "description": "Bad request - missing required fields",
+            "description": "Bad request - the body failed validation",
             "content": {
               "application/json": {
                 "schema": {
@@ -36076,10 +36774,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "presentationId": {
-                      "type": "string",
-                      "description": "The ID of the updated presentation"
-                    },
                     "replies": {
                       "type": "array",
                       "items": {
@@ -36098,7 +36792,7 @@
             }
           },
           "400": {
-            "description": "Bad request - invalid update requests",
+            "description": "Bad request - an invalid or empty requests list, or a request Google refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -37007,40 +37701,6 @@
           },
           "2XX": {
             "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
-          }
-        }
-      }
-    },
-    "/api/v1/drive/files/{fileId}/permissions": {
-      "get": {
-        "operationId": "getFilePermissions",
-        "summary": "List permissions on a file",
-        "description": "List permissions on a file. Mirrors the MCP tool `getFilePermissions`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "drive"
-        ],
-        "parameters": [
-          {
-            "name": "fileId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
           }
         }
       }

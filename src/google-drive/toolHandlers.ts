@@ -274,6 +274,186 @@ export async function handleGetDocumentInfo(
   }
 }
 
+// --- Write ops ---
+// Each returns what Drive answered and lets Drive's error through with its
+// status, for the REST routes (src/google-drive/restRoutes.ts) to map. The
+// handle* functions below format the same result for the MCP tools.
+
+export async function performCreateFolder(
+  drive: drive_v3.Drive,
+  args: { name: string; parentFolderId?: string },
+): Promise<drive_v3.Schema$File> {
+  const folderMetadata: drive_v3.Schema$File = {
+    name: args.name,
+    mimeType: 'application/vnd.google-apps.folder',
+  };
+  if (args.parentFolderId) folderMetadata.parents = [args.parentFolderId];
+  const response = await drive.files.create({
+    requestBody: folderMetadata,
+    supportsAllDrives: true,
+    fields: 'id,name,parents,webViewLink,driveId',
+  });
+  return response.data;
+}
+
+/** Moves the item, or (removeFromAllParents false) copies it into newParentId. */
+export async function performMoveFile(
+  drive: drive_v3.Drive,
+  args: { fileId: string; newParentId: string; removeFromAllParents: boolean },
+): Promise<{ name: string | null | undefined; file: drive_v3.Schema$File; action: 'moved' | 'copied' }> {
+  const fileInfo = await drive.files.get({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    fields: 'name,parents',
+  });
+  const currentParents = fileInfo.data.parents || [];
+  if (args.removeFromAllParents) {
+    const updateParams: any = {
+      fileId: args.fileId,
+      addParents: args.newParentId,
+      supportsAllDrives: true,
+      fields: 'id,name,parents,driveId',
+    };
+    if (currentParents.length > 0) {
+      updateParams.removeParents = currentParents.join(',');
+    }
+    const response = await drive.files.update(updateParams);
+    return { name: fileInfo.data.name, file: response.data, action: 'moved' };
+  }
+  const response = await drive.files.copy({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    requestBody: { parents: [args.newParentId] },
+    fields: 'id,name,parents,driveId',
+  });
+  return { name: fileInfo.data.name, file: response.data, action: 'copied' };
+}
+
+export async function performCopyFile(
+  drive: drive_v3.Drive,
+  args: { fileId: string; newName?: string; parentFolderId?: string },
+): Promise<drive_v3.Schema$File> {
+  const originalFile = await drive.files.get({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    fields: 'name,parents',
+  });
+  const copyMetadata: drive_v3.Schema$File = {
+    name: args.newName || `Copy of ${originalFile.data.name}`,
+  };
+  if (args.parentFolderId) copyMetadata.parents = [args.parentFolderId];
+  else if (originalFile.data.parents) copyMetadata.parents = originalFile.data.parents;
+  const response = await drive.files.copy({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    requestBody: copyMetadata,
+    fields: 'id,name,webViewLink,driveId',
+  });
+  return response.data;
+}
+
+export async function performRenameFile(
+  drive: drive_v3.Drive,
+  args: { fileId: string; newName: string },
+): Promise<drive_v3.Schema$File> {
+  const response = await drive.files.update({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    requestBody: { name: args.newName },
+    fields: 'id,name,webViewLink',
+  });
+  return response.data;
+}
+
+/** Moves the item to the trash, and asks Drive for `trashed` so the caller can confirm it. */
+export async function performTrashFile(drive: drive_v3.Drive, fileId: string): Promise<drive_v3.Schema$File> {
+  const response = await drive.files.update({
+    fileId,
+    supportsAllDrives: true,
+    requestBody: { trashed: true },
+    fields: 'id,name,trashed',
+  });
+  return response.data;
+}
+
+export type TemplateReplacements =
+  | { applied: true; occurrencesChanged: Record<string, number> }
+  | { applied: false; error: string };
+
+/**
+ * Copies the template, then applies the replacements. The copy is kept when
+ * the replacements fail, so that outcome is reported, not thrown.
+ */
+export async function performCreateFromTemplate(
+  drive: drive_v3.Drive,
+  docsGetter: () => docs_v1.Docs,
+  args: { templateId: string; newTitle: string; parentFolderId?: string; replacements?: Record<string, string> },
+): Promise<{ document: drive_v3.Schema$File; replacements: TemplateReplacements | null }> {
+  const copyMetadata: drive_v3.Schema$File = { name: args.newTitle };
+  if (args.parentFolderId) copyMetadata.parents = [args.parentFolderId];
+  const response = await drive.files.copy({
+    fileId: args.templateId,
+    supportsAllDrives: true,
+    requestBody: copyMetadata,
+    fields: 'id,name,webViewLink,driveId',
+  });
+  const document = response.data;
+  const entries = Object.entries(args.replacements ?? {});
+  if (entries.length === 0) return { document, replacements: null };
+  try {
+    const result = await docsGetter().documents.batchUpdate({
+      documentId: document.id!,
+      requestBody: {
+        requests: entries.map(([searchText, replaceText]) => ({
+          replaceAllText: { containsText: { text: searchText, matchCase: false }, replaceText },
+        })),
+      },
+    });
+    // One reply per request, in order; 0 means the text was not in the template.
+    const replies = result?.data?.replies ?? [];
+    const occurrencesChanged = Object.fromEntries(
+      entries.map(([searchText], i) => [searchText, replies[i]?.replaceAllText?.occurrencesChanged ?? 0]),
+    );
+    return { document, replacements: { applied: true, occurrencesChanged } };
+  } catch (error: any) {
+    return { document, replacements: { applied: false, error: error?.message || String(error) } };
+  }
+}
+
+/** Creates the permission, then reads the file back for its name and link. */
+export async function performShareDriveFile(
+  drive: drive_v3.Drive,
+  args: {
+    fileId: string;
+    role: 'reader' | 'writer' | 'commenter';
+    type: 'user' | 'group' | 'domain' | 'anyone';
+    emailAddress?: string;
+    domain?: string;
+    sendNotification?: boolean;
+    expirationTime?: string;
+  },
+): Promise<{ permission: drive_v3.Schema$Permission; file: drive_v3.Schema$File }> {
+  validateShareArgs(args);
+  const isUserOrGroup = args.type === 'user' || args.type === 'group';
+  const permissionBody: drive_v3.Schema$Permission = { role: args.role, type: args.type };
+  if (args.emailAddress) permissionBody.emailAddress = args.emailAddress;
+  if (args.domain) permissionBody.domain = args.domain;
+  if (isUserOrGroup && args.expirationTime) permissionBody.expirationTime = args.expirationTime;
+  const createParams: drive_v3.Params$Resource$Permissions$Create = {
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    requestBody: permissionBody,
+  };
+  if (isUserOrGroup) createParams.sendNotificationEmail = args.sendNotification ?? true;
+  const permission = await drive.permissions.create(createParams);
+  const fileInfo = await drive.files.get({
+    fileId: args.fileId,
+    supportsAllDrives: true,
+    fields: 'name,webViewLink',
+  });
+  return { permission: permission.data, file: fileInfo.data };
+}
+
 export async function handleCreateFolder(
   drive: drive_v3.Drive,
   args: { name: string; parentFolderId?: string },
@@ -281,17 +461,7 @@ export async function handleCreateFolder(
 ): Promise<string> {
   log.info(`Creating folder "${args.name}" ${args.parentFolderId ? `in parent ${args.parentFolderId}` : 'in root'}`);
   try {
-    const folderMetadata: drive_v3.Schema$File = {
-      name: args.name,
-      mimeType: 'application/vnd.google-apps.folder',
-    };
-    if (args.parentFolderId) folderMetadata.parents = [args.parentFolderId];
-    const response = await drive.files.create({
-      requestBody: folderMetadata,
-      supportsAllDrives: true,
-      fields: 'id,name,parents,webViewLink,driveId',
-    });
-    const folder = response.data;
+    const folder = await performCreateFolder(drive, args);
     const locationInfo = folder.driveId ? ` in shared drive (ID: ${folder.driveId})` : '';
     return `Successfully created folder "${folder.name}" (ID: ${folder.id})${locationInfo}\nLink: ${folder.webViewLink}`;
   } catch (error: any) {
@@ -410,38 +580,9 @@ export async function handleMoveFile(
 ): Promise<string> {
   log.info(`Moving file ${args.fileId} to folder ${args.newParentId}`);
   try {
-    const fileInfo = await drive.files.get({
-      fileId: args.fileId,
-      supportsAllDrives: true,
-      fields: 'name,parents',
-    });
-    const fileName = fileInfo.data.name;
-    const currentParents = fileInfo.data.parents || [];
-    let response;
-    let action: 'moved' | 'copied';
-    if (args.removeFromAllParents) {
-      const updateParams: any = {
-        fileId: args.fileId,
-        addParents: args.newParentId,
-        supportsAllDrives: true,
-        fields: 'id,name,parents,driveId',
-      };
-      if (currentParents.length > 0) {
-        updateParams.removeParents = currentParents.join(',');
-      }
-      response = await drive.files.update(updateParams);
-      action = 'moved';
-    } else {
-      response = await drive.files.copy({
-        fileId: args.fileId,
-        supportsAllDrives: true,
-        requestBody: { parents: [args.newParentId] },
-        fields: 'id,name,parents,driveId',
-      });
-      action = 'copied';
-    }
-    const locationInfo = response.data.driveId ? ` (in shared drive ID: ${response.data.driveId})` : '';
-    return `Successfully ${action} "${fileName}" to new location${locationInfo}.\nFile ID: ${response.data.id}`;
+    const { name, file, action } = await performMoveFile(drive, args);
+    const locationInfo = file.driveId ? ` (in shared drive ID: ${file.driveId})` : '';
+    return `Successfully ${action} "${name}" to new location${locationInfo}.\nFile ID: ${file.id}`;
   } catch (error: any) {
     log.error(`Error moving file: ${error.message || error}`);
     if (error.code === 404) throw new UserError("File or destination folder not found. Check the IDs.");
@@ -457,23 +598,7 @@ export async function handleCopyFile(
 ): Promise<string> {
   log.info(`Copying file ${args.fileId} ${args.newName ? `as "${args.newName}"` : ''}`);
   try {
-    const originalFile = await drive.files.get({
-      fileId: args.fileId,
-      supportsAllDrives: true,
-      fields: 'name,parents',
-    });
-    const copyMetadata: drive_v3.Schema$File = {
-      name: args.newName || `Copy of ${originalFile.data.name}`,
-    };
-    if (args.parentFolderId) copyMetadata.parents = [args.parentFolderId];
-    else if (originalFile.data.parents) copyMetadata.parents = originalFile.data.parents;
-    const response = await drive.files.copy({
-      fileId: args.fileId,
-      supportsAllDrives: true,
-      requestBody: copyMetadata,
-      fields: 'id,name,webViewLink,driveId',
-    });
-    const copiedFile = response.data;
+    const copiedFile = await performCopyFile(drive, args);
     const locationInfo = copiedFile.driveId ? ` (in shared drive ID: ${copiedFile.driveId})` : '';
     return `Successfully created copy "${copiedFile.name}" (ID: ${copiedFile.id})${locationInfo}\nLink: ${copiedFile.webViewLink}`;
   } catch (error: any) {
@@ -491,13 +616,7 @@ export async function handleRenameFile(
 ): Promise<string> {
   log.info(`Renaming file ${args.fileId} to "${args.newName}"`);
   try {
-    const response = await drive.files.update({
-      fileId: args.fileId,
-      supportsAllDrives: true,
-      requestBody: { name: args.newName },
-      fields: 'id,name,webViewLink',
-    });
-    const file = response.data;
+    const file = await performRenameFile(drive, args);
     return `Successfully renamed to "${file.name}" (ID: ${file.id})\nLink: ${file.webViewLink}`;
   } catch (error: any) {
     log.error(`Error renaming file: ${error.message || error}`);
@@ -526,11 +645,7 @@ export async function handleDeleteFile(
       await drive.files.delete({ fileId: args.fileId, supportsAllDrives: true });
       return `Permanently deleted ${isFolder ? 'folder' : 'file'} "${fileName}"${isSharedDrive ? ' from shared drive' : ''}.`;
     }
-    await drive.files.update({
-      fileId: args.fileId,
-      supportsAllDrives: true,
-      requestBody: { trashed: true },
-    });
+    await performTrashFile(drive, args.fileId);
     return `Moved ${isFolder ? 'folder' : 'file'} "${fileName}" to trash. It can be restored from the trash.`;
   } catch (error: any) {
     log.error(`Error deleting file: ${error.message || error}`);
@@ -593,39 +708,15 @@ export async function handleCreateFromTemplate(
 ): Promise<string> {
   log.info(`Creating document from template ${args.templateId} with title "${args.newTitle}"`);
   try {
-    const copyMetadata: drive_v3.Schema$File = { name: args.newTitle };
-    if (args.parentFolderId) copyMetadata.parents = [args.parentFolderId];
-    const response = await drive.files.copy({
-      fileId: args.templateId,
-      supportsAllDrives: true,
-      requestBody: copyMetadata,
-      fields: 'id,name,webViewLink,driveId',
-    });
-    const document = response.data;
+    const { document, replacements } = await performCreateFromTemplate(drive, docsGetter, args);
     const locationInfo = document.driveId ? ` (in shared drive ID: ${document.driveId})` : '';
     let result = `Successfully created document "${document.name}" from template (ID: ${document.id})${locationInfo}\nView Link: ${document.webViewLink}`;
-    if (args.replacements && Object.keys(args.replacements).length > 0) {
-      try {
-        const docs = docsGetter();
-        const requests: docs_v1.Schema$Request[] = [];
-        for (const [searchText, replaceText] of Object.entries(args.replacements)) {
-          requests.push({
-            replaceAllText: {
-              containsText: { text: searchText, matchCase: false },
-              replaceText,
-            },
-          });
-        }
-        await docs.documents.batchUpdate({
-          documentId: document.id!,
-          requestBody: { requests },
-        });
-        const count = Object.keys(args.replacements).length;
-        result += `\n\nApplied ${count} text replacement${count !== 1 ? 's' : ''} to the document.`;
-      } catch (replacementError: any) {
-        log.warn(`Document created but failed to apply replacements: ${replacementError.message}`);
-        result += `\n\nDocument created but failed to apply text replacements. You can make changes manually.`;
-      }
+    if (replacements?.applied) {
+      const count = Object.keys(replacements.occurrencesChanged).length;
+      result += `\n\nApplied ${count} text replacement${count !== 1 ? 's' : ''} to the document.`;
+    } else if (replacements) {
+      log.warn(`Document created but failed to apply replacements: ${replacements.error}`);
+      result += `\n\nDocument created but failed to apply text replacements. You can make changes manually.`;
     }
     return result;
   } catch (error: any) {
@@ -822,26 +913,10 @@ export async function handleShareDriveFile(
 ): Promise<string> {
   log.info(`Sharing file ${args.fileId} as ${args.role} to ${args.type}${args.emailAddress ? ` (${args.emailAddress})` : ''}`);
   validateShareArgs(args);
-  const isUserOrGroup = args.type === 'user' || args.type === 'group';
   try {
-    const permissionBody: any = { role: args.role, type: args.type };
-    if (args.emailAddress) permissionBody.emailAddress = args.emailAddress;
-    if (args.domain) permissionBody.domain = args.domain;
-    if (isUserOrGroup && args.expirationTime) permissionBody.expirationTime = args.expirationTime;
-    const createParams: any = {
-      fileId: args.fileId,
-      supportsAllDrives: true,
-      requestBody: permissionBody,
-    };
-    if (isUserOrGroup) createParams.sendNotificationEmail = args.sendNotification ?? true;
-    await drive.permissions.create(createParams);
-    const fileInfo = await drive.files.get({
-      fileId: args.fileId,
-      supportsAllDrives: true,
-      fields: 'name,webViewLink',
-    });
+    const { file: fileInfo } = await performShareDriveFile(drive, args);
     const target = formatShareTarget(args.type, args.emailAddress, args.domain);
-    return `Shared successfully:\n  File: ${fileInfo.data.name}\n  Access: ${args.role} granted to ${target}\n  Link: ${fileInfo.data.webViewLink || 'N/A'}`;
+    return `Shared successfully:\n  File: ${fileInfo.name}\n  Access: ${args.role} granted to ${target}\n  Link: ${fileInfo.webViewLink || 'N/A'}`;
   } catch (error: any) {
     if (error instanceof UserError) throw error;
     log.error(`Error sharing file: ${error.message || error}`);

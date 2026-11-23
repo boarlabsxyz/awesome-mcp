@@ -35,6 +35,15 @@ import {
   createDriveUploadSessionSchema,
   performCreateDriveUploadSession,
 } from './filesOps.js';
+import {
+  createFolderSchema,
+  moveFileSchema,
+  copyFileSchema,
+  renameFileSchema,
+  deleteFileSchema,
+  createFromTemplateSchema,
+  shareDriveFileSchema,
+} from './schemas.js';
 import { describeDriveError } from './driveErrors.js';
 import { UserError } from 'fastmcp';
 import type { drive_v3 } from 'googleapis';
@@ -62,10 +71,7 @@ driveServer.addTool({
   name: 'createFolder',
   annotations: { readOnlyHint: false },
   description: 'Creates a new folder in Google Drive or a shared drive.',
-  parameters: z.object({
-    name: z.string().min(1).describe('Name for the new folder.'),
-    parentFolderId: z.string().optional().describe('Parent folder ID. If not provided, creates folder in Drive root. For shared drives, provide the shared drive ID or a folder ID within it.'),
-  }),
+  parameters: createFolderSchema,
   execute: async (args, { log, session }) => handleCreateFolder(getDriveClient(session), args, log),
 });
 
@@ -97,11 +103,7 @@ driveServer.addTool({
   name: 'moveFile',
   annotations: { readOnlyHint: false },
   description: 'Moves a file or folder to a different location in Google Drive (works with shared drives).',
-  parameters: z.object({
-    fileId: z.string().describe('ID of the file or folder to move.'),
-    newParentId: z.string().describe('ID of the destination folder. Use "root" for Drive root. For shared drives, use a folder ID within the shared drive.'),
-    removeFromAllParents: z.boolean().optional().default(false).describe('If true, removes from all current parents. If false, adds to new parent while keeping existing parents.'),
-  }),
+  parameters: moveFileSchema,
   execute: async (args, { log, session }) => handleMoveFile(getDriveClient(session), args, log),
 });
 
@@ -109,11 +111,7 @@ driveServer.addTool({
   name: 'copyFile',
   annotations: { readOnlyHint: false },
   description: 'Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead.',
-  parameters: z.object({
-    fileId: z.string().describe('ID of the file to copy.'),
-    newName: z.string().optional().describe('Name for the copied file. If not provided, will use "Copy of [original name]".'),
-    parentFolderId: z.string().optional().describe('ID of folder where copy should be placed. If not provided, places in same location as original. For shared drives, use a folder ID within the shared drive.'),
-  }),
+  parameters: copyFileSchema,
   execute: async (args, { log, session }) => handleCopyFile(getDriveClient(session), args, log),
 });
 
@@ -121,21 +119,15 @@ driveServer.addTool({
   name: 'renameFile',
   annotations: { readOnlyHint: false },
   description: 'Renames a file or folder in Google Drive (works with shared drives).',
-  parameters: z.object({
-    fileId: z.string().describe('ID of the file or folder to rename.'),
-    newName: z.string().min(1).describe('New name for the file or folder.'),
-  }),
+  parameters: renameFileSchema,
   execute: async (args, { log, session }) => handleRenameFile(getDriveClient(session), args, log),
 });
 
 driveServer.addTool({
   name: 'deleteFile',
   annotations: { readOnlyHint: false, destructiveHint: true },
-  description: 'Permanently deletes a file or folder from Google Drive (works with shared drives).',
-  parameters: z.object({
-    fileId: z.string().describe('ID of the file or folder to delete.'),
-    skipTrash: z.boolean().optional().default(false).describe('If true, permanently deletes the file. If false, moves to trash (can be restored).'),
-  }),
+  description: 'Deletes a file or folder from Google Drive (works with shared drives): moves it to the trash, where it can be restored, or with skipTrash deletes it permanently.',
+  parameters: deleteFileSchema,
   execute: async (args, { log, session }) => handleDeleteFile(getDriveClient(session), args, log),
 });
 
@@ -156,12 +148,7 @@ driveServer.addTool({
   name: 'createFromTemplate',
   annotations: { readOnlyHint: false },
   description: 'Creates a new Google Document from an existing document template (works with shared drives).',
-  parameters: z.object({
-    templateId: z.string().describe('ID of the template document to copy from.'),
-    newTitle: z.string().min(1).describe('Title for the new document.'),
-    parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
-    replacements: z.record(z.string()).optional().describe('Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).'),
-  }),
+  parameters: createFromTemplateSchema,
   execute: async (args, { log, session }) =>
     handleCreateFromTemplate(getDriveClient(session), () => getDocsClient(session), args, log),
 });
@@ -203,37 +190,7 @@ driveServer.addTool({
   name: 'shareDriveFile',
   annotations: { readOnlyHint: false },
   description: 'Share a Google Drive file or folder by creating a permission. Required fields by type: type=user|group → emailAddress; type=domain → domain; type=anyone → no extra field.',
-  parameters: z.object({
-    fileId: z.string().describe('The Drive file or folder ID to share.'),
-    role: z.enum(['reader', 'writer', 'commenter']).describe('The access role to grant.'),
-    type: z.enum(['user', 'group', 'domain', 'anyone']).describe('The type of grantee.'),
-    emailAddress: z.string().optional().describe('Email address of the user or group (required for type "user" or "group").'),
-    domain: z.string().optional().describe('Domain name (required for type "domain").'),
-    sendNotification: z.boolean().optional().default(true).describe('Whether to send an email notification (only for user/group shares).'),
-    expirationTime: z.string().optional().describe('Expiration time in RFC 3339 format (e.g., "2025-12-31T23:59:59Z"). Only for user/group shares on files (not folders).'),
-  }).superRefine((val, ctx) => {
-    if ((val.type === 'user' || val.type === 'group') && !val.emailAddress) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['emailAddress'],
-        message: 'emailAddress is required when type is "user" or "group".',
-      });
-    }
-    if (val.type === 'domain' && !val.domain) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['domain'],
-        message: 'domain is required when type is "domain".',
-      });
-    }
-    if (val.expirationTime && val.type !== 'user' && val.type !== 'group') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['expirationTime'],
-        message: `expirationTime is only supported for user/group shares, not "${val.type}".`,
-      });
-    }
-  }),
+  parameters: shareDriveFileSchema,
   execute: async (args, { log, session }) => (await handleShareDriveFile(getDriveClient(session), args, log)) as string,
 });
 

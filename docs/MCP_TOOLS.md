@@ -132,19 +132,19 @@ Source: `src/google-drive/server.ts` — 19 tools.
 | Tool | Description | REST |
 |---|---|---|
 | `getDocumentInfo` | Gets detailed information about a specific Google Document (works with shared drives). | `GET /api/v1/drive/files/{fileId}` |
-| `createFolder` | Creates a new folder in Google Drive or a shared drive. | — |
+| `createFolder` | Creates a new folder in Google Drive or a shared drive. | `POST /api/v1/drive/folders` |
 | `listFolderContents` | Lists the contents of a specific folder in Google Drive or a shared drive. | `GET /api/v1/drive/folders/{folderId}/contents` |
 | `getFolderInfo` | Gets detailed information about a specific folder in Google Drive or a shared drive. | `GET /api/v1/drive/folders/{folderId}` |
-| `moveFile` | Moves a file or folder to a different location in Google Drive (works with shared drives). | — |
-| `copyFile` | Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead. | — |
-| `renameFile` | Renames a file or folder in Google Drive (works with shared drives). | — |
-| `deleteFile` | Permanently deletes a file or folder from Google Drive (works with shared drives). | — |
+| `moveFile` | Moves a file or folder to a different location in Google Drive (works with shared drives). | `POST /api/v1/drive/files/{fileId}/move` |
+| `copyFile` | Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead. | `POST /api/v1/drive/files/{fileId}/copy` |
+| `renameFile` | Renames a file or folder in Google Drive (works with shared drives). | `POST /api/v1/drive/files/{fileId}/rename` |
+| `deleteFile` | Deletes a file or folder from Google Drive (works with shared drives): moves it to the trash, where it can be restored, or with skipTrash deletes it permanently. | `POST /api/v1/drive/files/{fileId}/trash` |
 | `createDocument` | Creates a new Google Document (works with shared drives). | — |
-| `createFromTemplate` | Creates a new Google Document from an existing document template (works with shared drives). | — |
+| `createFromTemplate` | Creates a new Google Document from an existing document template (works with shared drives). | `POST /api/v1/drive/templates/{templateId}/documents` |
 | `listSharedDrives` | Lists shared drives (Team Drives) the user has access to. | `GET /api/v1/drive/shared-drives` |
 | `downloadDriveFile` | Download/export a Google Drive file. For Google Workspace files (Docs, Sheets, Slides), exports to a chosen format (PDF, DOCX, XLSX, PPTX, CSV) and saves the exported file to Drive. For binary files, returns the direct download link. | `GET /api/v1/drive/files/{fileId}/download` |
 | `getFilePermissions` | Retrieve all permissions on a Google Drive file or folder. Shows who has access, their roles, and sharing status. | `GET /api/v1/drive/files/{fileId}/permissions` |
-| `shareDriveFile` | Share a Google Drive file or folder by creating a permission. Required fields by type: type=user\|group → emailAddress; type=domain → domain; type=anyone → no extra field. | — |
+| `shareDriveFile` | Share a Google Drive file or folder by creating a permission. Required fields by type: type=user\|group → emailAddress; type=domain → domain; type=anyone → no extra field. | `POST /api/v1/drive/files/{fileId}/permissions` |
 | `checkPublicAccess` | List the file's direct permissions and report whether an "anyone with link" grant exists on the file itself. Does NOT follow folder-inherited, domain-wide, or shared-drive policies, so a file inside a public folder may report private here. | `GET /api/v1/drive/files/{fileId}/public` |
 | `searchDriveFiles` | Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated. | `GET /api/v1/drive/files?q={query}` |
 | `listDriveChanges` | Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with. | `GET /api/v1/drive/changes` |
@@ -182,11 +182,11 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `createPresentation` | Create a new Google Slides presentation. | — |
+| `createPresentation` | Create a new Google Slides presentation. | `POST /api/v1/slides` |
 | `getPresentation` | Get presentation metadata, slide IDs, and text content from all slides. | `GET /api/v1/slides/{presentationId}` |
 | `getPage` | Get details of a specific slide including shapes, tables, and other elements. | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}` |
 | `getPageThumbnail` | Get a PNG thumbnail URL for a specific slide. | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail` |
-| `batchUpdatePresentation` | Apply multiple operations to a presentation (create slides, add shapes, insert text, delete objects, etc.). Pass an array of Google Slides API request objects. | — |
+| `batchUpdatePresentation` | Apply multiple operations to a presentation (create slides, add shapes, insert text, delete objects, etc.). Pass an array of Google Slides API request objects. | `POST /api/v1/slides/{presentationId}/batchUpdate` |
 | `listPresentationComments` | List comments on a Google Slides presentation (via Drive API). | `GET /api/v1/slides/{presentationId}/comments` |
 
 ## ClickUp

@@ -87,6 +87,36 @@ function handleSlidesError(error: any, context: string, notFoundMsg: string): ne
   throw new UserError(`Failed to ${context}: ${error.message || 'Unknown error'}`);
 }
 
+// --- Write ops ---
+// Each returns what Slides answered and lets Google's error through with its
+// status, for the REST routes (src/google-slides/restRoutes.ts) to map. The
+// handle* functions format the same result for the MCP tools.
+
+export async function performCreatePresentation(
+  slides: slides_v1.Slides,
+  args: { title: string },
+): Promise<slides_v1.Schema$Presentation> {
+  const response = await slides.presentations.create({
+    requestBody: { title: args.title },
+  });
+  return response.data;
+}
+
+/** `revisionId` is what the next pinned update should send, when Google returns one. */
+export async function performBatchUpdatePresentation(
+  slides: slides_v1.Slides,
+  args: { presentationId: string; requests: Record<string, any>[]; requiredRevisionId?: string },
+): Promise<{ replies: slides_v1.Schema$Response[]; revisionId: string | null }> {
+  const response = await slides.presentations.batchUpdate({
+    presentationId: args.presentationId,
+    requestBody: {
+      requests: args.requests as slides_v1.Schema$Request[],
+      ...(args.requiredRevisionId ? { writeControl: { requiredRevisionId: args.requiredRevisionId } } : {}),
+    },
+  });
+  return { replies: response.data.replies || [], revisionId: response.data.writeControl?.requiredRevisionId ?? null };
+}
+
 export async function handleCreatePresentation(
   slides: slides_v1.Slides,
   args: { title: string },
@@ -94,10 +124,7 @@ export async function handleCreatePresentation(
 ): Promise<string> {
   log.info(`Creating presentation: "${args.title}"`);
   try {
-    const response = await slides.presentations.create({
-      requestBody: { title: args.title },
-    });
-    const p = response.data;
+    const p = await performCreatePresentation(slides, args);
     return `Presentation created successfully!\n\n` +
       `**Title:** ${p.title}\n` +
       `**ID:** ${p.presentationId}\n` +
@@ -259,16 +286,7 @@ export async function handleBatchUpdatePresentation(
 ): Promise<string> {
   log.info(`Batch updating presentation ${args.presentationId} with ${args.requests.length} request(s)`);
   try {
-    const response = await slides.presentations.batchUpdate({
-      presentationId: args.presentationId,
-      requestBody: {
-        requests: args.requests as slides_v1.Schema$Request[],
-        ...(args.requiredRevisionId ? { writeControl: { requiredRevisionId: args.requiredRevisionId } } : {}),
-      },
-    });
-
-    const replies = response.data.replies || [];
-    const revisionId = response.data.writeControl?.requiredRevisionId;
+    const { replies, revisionId } = await performBatchUpdatePresentation(slides, args);
     let result = `Batch update successful! ${args.requests.length} request(s) applied.\n`;
     if (revisionId) result += `Presentation revision is now ${revisionId}.\n`;
     else if (args.requiredRevisionId) result += 'Google did not return the new revision; re-read before pinning another update.\n';
