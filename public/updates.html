@@ -182,13 +182,23 @@
         <h3>What's New</h3>
         <ul>
           <li><strong>Google Calendar:</strong> Check when people are free with the new queryFreeBusy tool, which looks across multiple calendars at once</li>
-          <li><strong>Google Drive:</strong> Create a new document from a template with text replacements</li>
-          <li><strong>Google Drive:</strong> Move, rename, trash, and share files</li>
           <li><strong>Slack:</strong> List unread conversations, jump to the first unread message, and mark conversations as read</li>
+        </ul>
+        <h3>REST API</h3>
+        <ul>
+          <li><strong>Google Drive:</strong> Create folders, copy, move, rename, trash and share files, and create a Google Doc from a template with text replacements, straight from scripts with <code>curl</code> (spec: <a href="/openapi-drive.json">openapi-drive.json</a>)</li>
+          <li><strong>Google Slides:</strong> Create presentations and apply whole batches of slide changes in one request, up to 5 MB (spec: <a href="/openapi-slides.json">openapi-slides.json</a>)</li>
+          <li><strong>Google Drive:</strong> The new trash endpoint only moves files to the trash, but the existing <code>DELETE /api/v1/drive/files/{fileId}</code> still deletes permanently when you pass <code>permanent=true</code>. Both, and sharing (including public links), work with your dashboard API key, so keep that key private</li>
+        </ul>
+        <h3>Improvements</h3>
+        <ul>
+          <li><strong>Google Drive:</strong> Creating a document from a template now only accepts Google Docs templates, instead of copying other file types</li>
+          <li><strong>Google Drive:</strong> The move and delete tools now say what they do by default: move makes a copy unless asked to remove the original, and delete moves to the trash unless asked to delete permanently</li>
         </ul>
         <h3>Bug Fixes</h3>
         <ul>
-          <li><strong>Google Drive:</strong> Creating a document from a template now correctly places it in My Drive root when no folder is specified</li>
+          <li><strong>Google Drive:</strong> Creating a document from a template now places it in My Drive root when no folder is given, instead of next to the template, where it picked up that folder's sharing</li>
+          <li><strong>Google Drive:</strong> Sharing a file no longer reports a failure for a share that actually went through</li>
           <li><strong>Slack:</strong> Scanning for unread messages now returns partial results if rate-limited partway through, instead of failing completely</li>
         </ul>
       </div>
