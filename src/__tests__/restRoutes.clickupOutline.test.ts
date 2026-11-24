@@ -854,6 +854,31 @@ describe('REST data plane: ClickUp and Outline handler bodies', () => {
         .set(auth()).send({ content: 'x'.repeat(300_000) });
       assert.equal(res.status, 200, `expected the large body to be parsed, got ${res.status}`);
     });
+
+    it('subscribe answers 503 without BASE_URL, before calling ClickUp', async () => {
+      const saved = process.env.BASE_URL;
+      delete process.env.BASE_URL;
+      try {
+        reset();
+        const res = await request(app).post('/api/v1/clickup/workspaces/ws-1/subscription').set(auth()).send({});
+        assert.equal(res.status, 503);
+        assert.match(res.body.error, /BASE_URL/);
+        assert.equal(calls.length, 0);
+      } finally {
+        if (saved === undefined) delete process.env.BASE_URL; else process.env.BASE_URL = saved;
+      }
+    });
+
+    it('subscribe refuses an unknown event type and an unknown key with 400', async () => {
+      reset();
+      const badEvent = await request(app).post('/api/v1/clickup/workspaces/ws-1/subscription').set(auth())
+        .send({ events: ['taskUpdated'] });
+      assert.equal(badEvent.status, 400);
+      const unknown = await request(app).post('/api/v1/clickup/workspaces/ws-1/subscription').set(auth())
+        .send({ endpoint: 'https://evil.test' });
+      assert.equal(unknown.status, 400);
+      assert.equal(calls.length, 0);
+    });
   });
 
   // ===================== Outline reads =====================

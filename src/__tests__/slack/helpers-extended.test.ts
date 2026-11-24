@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
-import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, resolveMessageBody, performPostMessage, performEditMessage, projectWriteOutcome } from '../../slack/helpers.js';
+import { performDownloadFileBytes, resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, resolveMessageBody, performPostMessage, performEditMessage, projectWriteOutcome } from '../../slack/helpers.js';
 import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 /** What the last chatPostMessage call was handed as its options argument. */
@@ -1121,5 +1121,52 @@ describe('write ops and their REST projection', () => {
       // An error nobody rewrote keeps no status, so the mapper reads its code.
       assert.equal(await statusOf(() => performPostMessage(failing('channel_not_found'), 'C1', 'x')), undefined);
     });
+  });
+});
+
+describe('performDownloadFileBytes (REST download)', () => {
+  const file = { id: 'F1', name: 'report.pdf', mimetype: 'application/pdf', channels: ['C1'], url_private_download: 'https://files.slack.com/f/report.pdf' };
+  const client = (f: any, download: (url: string) => Promise<any>) => ({
+    filesInfo: async () => ({ file: f }),
+    downloadFileBytes: download,
+  }) as any;
+
+  it('returns the bytes of any type, with the file mimetype, after the share check', async () => {
+    let fetched = '';
+    const r = await performDownloadFileBytes(client(file, async (url) => {
+      fetched = url;
+      return { buffer: Buffer.from('%PDF'), contentType: 'application/octet-stream' };
+    }), { fileId: 'F1', channelId: 'C1' });
+    assert.equal(fetched, file.url_private_download);
+    assert.equal(r.buffer.toString(), '%PDF');
+    assert.equal(r.contentType, 'application/pdf');
+  });
+
+  it('falls back to the response type, then octet-stream, when Slack names no mimetype', async () => {
+    const bare = { ...file, mimetype: undefined };
+    const typed = await performDownloadFileBytes(client(bare, async () => ({ buffer: Buffer.from('x'), contentType: 'text/csv' })), { fileId: 'F1', channelId: 'C1' });
+    assert.equal(typed.contentType, 'text/csv');
+    const untyped = await performDownloadFileBytes(client(bare, async () => ({ buffer: Buffer.from('x'), contentType: '' })), { fileId: 'F1', channelId: 'C1' });
+    assert.equal(untyped.contentType, 'application/octet-stream');
+  });
+
+  it('turns the size cap into a 422 refusal and passes other failures through', async () => {
+    await assert.rejects(
+      performDownloadFileBytes(client(file, async () => { throw new Error('Slack file exceeds the maximum size (20 bytes).'); }), { fileId: 'F1', channelId: 'C1' }),
+      (err: any) => err.status === 422,
+    );
+    await assert.rejects(
+      performDownloadFileBytes(client(file, async () => { throw new Error('boom'); }), { fileId: 'F1', channelId: 'C1' }),
+      (err: any) => err.message === 'boom' && err.status === undefined,
+    );
+  });
+
+  it('refuses an unshared file with 403 and rethrows a files.info failure untouched', async () => {
+    await assert.rejects(
+      performDownloadFileBytes(client(file, async () => ({})), { fileId: 'F1', channelId: 'C9' }),
+      (err: any) => err.status === 403,
+    );
+    const failing = { filesInfo: async () => { throw new Error('file_not_found'); } } as any;
+    await assert.rejects(performDownloadFileBytes(failing, { fileId: 'F1', channelId: 'C1' }), /file_not_found/);
   });
 });

@@ -26,6 +26,8 @@ const {
   batchUpdateSpreadsheetSchema,
   performCreateSpreadsheet,
   performBatchUpdateSpreadsheet,
+  performAddSpreadsheetSheet,
+  performUpdateCellByFieldName,
 } = sheetsModule as any;
 
 const SheetsHelpers = await import('../google-sheets/apiHelpers.js');
@@ -521,6 +523,77 @@ describe('grid growth operations', () => {
     const out = await callTool('addSpreadsheetSheet', { spreadsheetId: 'ss-1', sheetTitle: 'Plain' }, { googleSheets: sheets });
     assert.equal(sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0].addSheet.properties.gridProperties, undefined);
     assert.doesNotMatch(out, /Grid:/);
+  });
+
+  it('performAddSpreadsheetSheet returns the reply properties, and a reply without them is a 502', async () => {
+    const ok = mkSheets({
+      spreadsheets: { batchUpdate: mock.fn(async () => ({ data: { replies: [{ addSheet: { properties: { title: 'T', sheetId: 4 } } }] } })) },
+    });
+    assert.deepEqual(await performAddSpreadsheetSheet(ok, { spreadsheetId: 'ss-1', sheetTitle: 'T' }), { title: 'T', sheetId: 4 });
+    const empty = mkSheets({ spreadsheets: { batchUpdate: mock.fn(async () => ({ data: { replies: [{}] } })) } });
+    await assert.rejects(performAddSpreadsheetSheet(empty, { spreadsheetId: 'ss-1', sheetTitle: 'T' }), (err: any) => err.code === 502);
+    // The tool keeps its old message for that case.
+    await assert.rejects(callTool('addSpreadsheetSheet', { spreadsheetId: 'ss-1', sheetTitle: 'T' }, { googleSheets: empty }), /no sheet properties returned/);
+  });
+
+  it('addSpreadsheetSheet keeps Google 400 (duplicate name) on .code for the REST route', async () => {
+    const dup = mkSheets({ spreadsheets: { batchUpdate: mock.fn(async () => { throw mkErr(400, 'A sheet with the name "T" already exists.'); }) } });
+    await assert.rejects(performAddSpreadsheetSheet(dup, { spreadsheetId: 'ss-1', sheetTitle: 'T' }), (err: any) => err.code === 400);
+    await assert.rejects(callTool('addSpreadsheetSheet', { spreadsheetId: 'ss-1', sheetTitle: 'T' }, { googleSheets: dup }), /already exists/);
+  });
+});
+
+describe('updateCellByFieldName', () => {
+  /** A sheet whose column A holds ids and row 1 the headers. */
+  function grid(update: any = mock.fn(async () => ({ data: { updatedCells: 1 } }))): any {
+    const rows = [['id', 'name', 'status'], ['a1', 'Ada', 'new'], ['b2', 'Bob', 'new']];
+    return mkSheets({
+      values: {
+        get: mock.fn(async ({ range }: any) => {
+          if (/!?A:A$/.test(range)) return { data: { values: rows.map(r => [r[0]]) } };
+          if (/1:1$/.test(range)) return { data: { values: [rows[0]] } };
+          const n = Number(String(range).split('!').pop()!.split(':')[0]);
+          return { data: { values: [rows[n - 1]] } };
+        }),
+        update,
+      },
+    });
+  }
+  const args = { spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'b2', fieldName: 'status', newValue: 'done' };
+
+  it('writes the named field of the matched row and reports the old value and updatedCells', async () => {
+    const update = mock.fn(async () => ({ data: { updatedCells: 1 } }));
+    const r: any = await performUpdateCellByFieldName(grid(update), args);
+    assert.equal(r.success, true);
+    assert.deepEqual(r.updated, { row: 3, column: 'C', cell: 'C3' });
+    assert.equal(r.oldValue, 'new');
+    assert.equal(r.updatedCells, 1);
+    assert.equal((update.mock.calls[0] as any).arguments[0].range, 'C3');
+    assert.deepEqual(r.rowContext, { id: 'b2', name: 'Bob', status: 'new' });
+  });
+
+  it('prefixes the sheet name, and reports updatedCells null when Google says nothing', async () => {
+    const update = mock.fn(async () => ({ data: {} }));
+    const r: any = await performUpdateCellByFieldName(grid(update), { ...args, sheetName: 'Data' });
+    assert.equal((update.mock.calls[0] as any).arguments[0].range, 'Data!C3');
+    assert.equal(r.updatedCells, null);
+  });
+
+  it('returns a reason, writing nothing, for a missing value or header', async () => {
+    const update = mock.fn(async () => ({ data: {} }));
+    const noRow: any = await performUpdateCellByFieldName(grid(update), { ...args, searchValue: 'zz' });
+    assert.equal(noRow.reason, 'valueNotFound');
+    const noField: any = await performUpdateCellByFieldName(grid(update), { ...args, fieldName: 'owner' });
+    assert.equal(noField.reason, 'fieldNotFound');
+    assert.deepEqual(noField.availableHeaders, ['id', 'name', 'status']);
+    assert.equal(update.mock.calls.length, 0);
+  });
+
+  it('keeps the tool JSON unchanged: no reason on a miss, no updatedCells on success', async () => {
+    const miss = JSON.parse(await callTool('updateCellByFieldName', { ...args, searchValue: 'zz' }, { googleSheets: grid() }));
+    assert.deepEqual(Object.keys(miss), ['success', 'error']);
+    const hit = JSON.parse(await callTool('updateCellByFieldName', args, { googleSheets: grid() }));
+    assert.deepEqual(Object.keys(hit), ['success', 'updated', 'rowContext', 'field', 'oldValue', 'newValue']);
   });
 });
 

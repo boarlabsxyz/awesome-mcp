@@ -257,4 +257,102 @@ describe('REST data plane: Slack handler bodies', () => {
       assert.match(res.text, /\(ts: 1792342127\.272519\) Nine: fallback/);
     });
   });
+
+  // The REST coverage pass: openDm, findCanvasSections, downloadFile.
+  describe('POST /api/v1/slack/dms', () => {
+    it('opens a 1-on-1 DM and answers its channel id', async () => {
+      replies['conversations.open'] = { ok: true, channel: { id: 'D42' } };
+      const res = await request(app).post('/api/v1/slack/dms').set(auth()).send({ userId: 'U1' });
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body, { channelId: 'D42', users: ['U1'], kind: 'im' });
+      assert.equal(callsTo('conversations.open')[0].params.get('users'), 'U1');
+    });
+
+    it('opens a group DM with userIds', async () => {
+      replies['conversations.open'] = { ok: true, channel: { id: 'G7' } };
+      const res = await request(app).post('/api/v1/slack/dms').set(auth()).send({ userIds: ['U1', 'U2'] });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.kind, 'mpim');
+      assert.equal(callsTo('conversations.open')[0].params.get('users'), 'U1,U2');
+    });
+
+    it('refuses both or neither with 400, before calling Slack', async () => {
+      for (const body of [{}, { userId: 'U1', userIds: ['U2', 'U3'] }]) {
+        const res = await request(app).post('/api/v1/slack/dms').set(auth()).send(body);
+        assert.equal(res.status, 400);
+        assert.match(res.body.error, /not both or neither/);
+      }
+      assert.equal(calls.length, 0);
+    });
+
+    it('refuses an unknown key (strict body) and the permanent API key', async () => {
+      const strict = await request(app).post('/api/v1/slack/dms').set(auth()).send({ users: 'U1' });
+      assert.equal(strict.status, 400);
+      const key = await request(app).post('/api/v1/slack/dms').set({ Authorization: `Bearer ${apiKey}` }).send({ userId: 'U1' });
+      assert.equal(key.status, 403);
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  describe('GET /api/v1/slack/canvases/:canvasId/sections', () => {
+    it('looks sections up by text and header type', async () => {
+      replies['canvases.sections.lookup'] = { ok: true, sections: [{ id: 'temp:C:1' }, { id: 'temp:C:2' }] };
+      const res = await request(app).get('/api/v1/slack/canvases/F9/sections?containsText=Intro&sectionTypes=h1,h2').set(auth());
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.body, { canvasId: 'F9', sections: [{ id: 'temp:C:1' }, { id: 'temp:C:2' }] });
+      const sent = callsTo('canvases.sections.lookup')[0].params;
+      assert.equal(sent.get('canvas_id'), 'F9');
+      assert.deepEqual(JSON.parse(sent.get('criteria')!), { contains_text: 'Intro', section_types: ['h1', 'h2'] });
+    });
+
+    it('answers 400 with no criteria, and for an unknown header type', async () => {
+      const none = await request(app).get('/api/v1/slack/canvases/F9/sections').set(auth());
+      assert.equal(none.status, 400);
+      assert.match(none.body.error, /containsText and\/or sectionTypes/);
+      const bad = await request(app).get('/api/v1/slack/canvases/F9/sections?sectionTypes=h9').set(auth());
+      assert.equal(bad.status, 400);
+      assert.ok(bad.body.issues);
+      assert.equal(calls.length, 0);
+    });
+
+    it('maps a Slack canvas_not_found to 404', async () => {
+      replies['canvases.sections.lookup'] = { ok: false, error: 'canvas_not_found' };
+      const res = await request(app).get('/api/v1/slack/canvases/F9/sections?containsText=x').set(auth());
+      assert.equal(res.status, 404);
+    });
+  });
+
+  describe('GET /api/v1/slack/files/:fileId/download', () => {
+    const shared = { id: 'F1', name: 'a.txt', mimetype: 'text/plain', channels: ['C1'], url_private_download: 'https://files.slack.com/f/a.txt' };
+
+    it('requires channelId', async () => {
+      const res = await request(app).get('/api/v1/slack/files/F1/download').set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /channelId/);
+      assert.equal(calls.length, 0);
+    });
+
+    it('refuses a file not shared in the named channel with 403', async () => {
+      replies['files.info'] = { ok: true, file: shared };
+      const res = await request(app).get('/api/v1/slack/files/F1/download?channelId=C2').set(auth());
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, /not shared in channel C2/);
+    });
+
+    it('answers 422 for a file hosted outside Slack, and 404 with no download URL', async () => {
+      replies['files.info'] = { ok: true, file: { ...shared, is_external: true } };
+      const ext = await request(app).get('/api/v1/slack/files/F1/download?channelId=C1').set(auth());
+      assert.equal(ext.status, 422);
+      replies['files.info'] = { ok: true, file: { id: 'F1', channels: ['C1'] } };
+      const gone = await request(app).get('/api/v1/slack/files/F1/download?channelId=C1').set(auth());
+      assert.equal(gone.status, 404);
+    });
+
+    it('answers 403 naming the scope when files.info lacks files:read', async () => {
+      replies['files.info'] = { ok: false, error: 'missing_scope' };
+      const res = await request(app).get('/api/v1/slack/files/F1/download?channelId=C1').set(auth());
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, /files:read/);
+    });
+  });
 });

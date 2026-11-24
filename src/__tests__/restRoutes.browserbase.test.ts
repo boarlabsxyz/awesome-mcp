@@ -289,6 +289,71 @@ describe('REST data plane: Browserbase handlers', () => {
     assert.equal(res.body.sessionId, 'sess-9');
   });
 
+  it('acts on the page, sending the action and the PATH sessionId upstream', async () => {
+    const calls = mockUpstreams({ toolText: '{"success":true,"data":"clicked Sign in"}' });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/act', { action: 'click Sign in', sessionId: 'other' });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, { sessionId: 'sess-1', result: 'clicked Sign in' });
+    const toolCall = calls.find(c => c.body?.method === 'tools/call');
+    assert.equal(toolCall?.body.params.name, 'act');
+    assert.deepEqual(toolCall?.body.params.arguments, { action: 'click Sign in', sessionId: 'sess-1' });
+  });
+
+  it('refuses an act with no action, before reaching Browserbase', async () => {
+    const calls = mockUpstreams({ toolText: 'x' });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/act', {});
+    assert.equal(res.status, 400);
+    assert.equal(calls.length, 0);
+  });
+
+  it('does not apply domain rules to act, matching the MCP tool (rules bind navigate only)', async () => {
+    // The restricted connection refuses an off-list navigate (403, above) and
+    // still runs an action: an action names no destination to check.
+    mockUpstreams({ toolText: 'done' });
+    const denied = await post('/api/v1/browserbase/sessions/sess-1/navigate', { url: 'https://other.test' }, rulesApiKey);
+    assert.equal(denied.status, 403);
+    const acted = await post('/api/v1/browserbase/sessions/sess-1/act', { action: 'submit the form' }, rulesApiKey);
+    assert.equal(acted.status, 200);
+  });
+
+  it('ends a session: hosted end, then a release, billingStopped true', async () => {
+    const calls = mockUpstreams({ toolText: 'closed', rest: { id: 'sess-1', status: 'REQUEST_RELEASE' } });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.closedVia, 'end');
+    assert.equal(res.body.billingStopped, true);
+    assert.ok(calls.some(c => c.body?.params?.name === 'end'));
+    assert.ok(calls.some(c => c.url.includes('/sessions/sess-1') && c.body?.status === 'REQUEST_RELEASE'));
+  });
+
+  it('end falls back to the release when the hosted call fails', async () => {
+    mockUpstreams({ toolIsError: true, toolText: 'transport closed', rest: { id: 'sess-1', status: 'REQUEST_RELEASE' } });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.closedVia, 'release');
+    assert.equal(res.body.billingStopped, true);
+    assert.ok(res.body.endError);
+  });
+
+  it('end reports billingStopped null when only the hosted call succeeded', async () => {
+    mockUpstreams({ toolText: 'closed', rest: { error: 'nope' }, restStatus: 500 });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.billingStopped, null);
+    assert.ok(res.body.releaseError);
+  });
+
+  it('end answers 502 when neither path closed it, and 404 for an unknown session', async () => {
+    mockUpstreams({ toolIsError: true, toolText: 'transport closed', rest: { error: 'down' }, restStatus: 500 });
+    const failed = await post('/api/v1/browserbase/sessions/sess-1/end');
+    assert.equal(failed.status, 502);
+    assert.match(failed.body.error, /may still be running and billing/);
+
+    mockUpstreams({ toolIsError: true, toolText: 'transport closed', rest: { error: 'missing' }, restStatus: 404 });
+    const missing = await post('/api/v1/browserbase/sessions/sess-1/end');
+    assert.equal(missing.status, 404);
+  });
+
   it('403s for an account with no Browserbase connection', async () => {
     await createOrUpdateUser(
       { email: 'bb-none@example.com', googleId: 'google-bb-none', name: 'BB None' },
