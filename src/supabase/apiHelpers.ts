@@ -10,7 +10,7 @@ import { UserError } from 'fastmcp';
 
 import type { UserSession } from '../userSession.js';
 
-import { proxySupabaseTool } from './hostedProxy.js';
+import { capResult, proxySupabaseToolUncapped } from './hostedProxy.js';
 import { argsForSettings, type SupabaseSettings } from './settings.js';
 import type { SupabaseToolDef } from './schemas.js';
 import { refreshSupabaseToken, SUPABASE_TOKEN_URL } from './oauthCallback.js';
@@ -127,12 +127,33 @@ export async function runSupabaseTool(
   session: UserSession | undefined,
   log: SupabaseToolLog,
 ): Promise<string> {
+  return capResult(await runSupabaseToolUncapped(def, args, session, log));
+}
+
+/**
+ * Everything `runSupabaseTool` does except the result cap: the connection's
+ * settings (re-read, fail closed), the local refusal, the refresh, the call.
+ * The REST plane runs THIS, so a curl meets exactly the settings a tool call
+ * meets; it applies the same cap itself and reports it in a field.
+ */
+export async function runSupabaseToolUncapped(
+  def: Pick<SupabaseToolDef, 'name' | 'group' | 'annotations'>,
+  args: Record<string, unknown>,
+  session: UserSession | undefined,
+  log: SupabaseToolLog,
+): Promise<string> {
   const settings = await getSupabaseSettings(session);
   const forwarded = argsForSettings(def, args, settings);
   await maybeRefreshSupabaseToken(session, log);
   const token = getSupabaseAccessToken(session);
-  return proxySupabaseTool(token, def.name, forwarded, {}, settings);
+  return proxySupabaseToolUncapped(token, def.name, forwarded, {}, settings);
 }
+
+/**
+ * The settings could not be read, so nothing ran. A UserError for the tool;
+ * the REST plane answers 503 on the name (our store failed, not the caller).
+ */
+export class SupabaseSettingsUnavailable extends UserError {}
 
 /**
  * The connection's settings, re-read per call (sessions are cached, settings
@@ -153,7 +174,7 @@ export async function getSupabaseSettings(session: UserSession | undefined): Pro
   }
   // A connection that is gone (deleted, replaced) is not "no settings".
   if (!connection) {
-    throw new UserError('Could not read this Supabase connection\'s settings (read-only, project limit), so nothing was run. Try again, or reconnect if the connection was removed.');
+    throw new SupabaseSettingsUnavailable('Could not read this Supabase connection\'s settings (read-only, project limit), so nothing was run. Try again, or reconnect if the connection was removed.');
   }
   return ((connection.providerTokens as any)?.supabaseSettings ?? {}) as SupabaseSettings;
 }
