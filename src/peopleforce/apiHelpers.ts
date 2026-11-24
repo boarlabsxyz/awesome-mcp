@@ -1478,13 +1478,83 @@ export function formatLocationList(
   });
 }
 
-export function formatSalaries(salaries: PeopleForceSalary[]): string {
+function salaryGroupKey(s: PeopleForceSalary): string {
+  const c = s.compensation_component;
+  if (!c) return 'none';
+  if (c.id !== undefined && c.id !== null) return `id:${c.id}`;
+  return c.name ? `name:${c.name}` : 'none';
+}
+
+/**
+ * Sorts salary records newest first (effective_on desc, a missing date last,
+ * ties broken by id desc) and flags the one in force today for each
+ * compensation component. A component is its own group, so a bonus never
+ * displaces a base salary; a record with no component is a group of its own
+ * (it is not merged with an explicit component). Future-dated records are
+ * never current. Returns new objects; the input is not mutated.
+ *
+ * @param today ISO date (YYYY-MM-DD). Injected so callers/tests are not at the
+ *   mercy of the host clock. The default is the UTC date, so a raise effective
+ *   today in a UTC+N tenant reads as scheduled for up to N hours.
+ */
+export function markCurrentSalaries(
+  salaries: PeopleForceSalary[],
+  today: string = new Date().toISOString().slice(0, 10),
+): Array<PeopleForceSalary & { current: boolean }> {
+  const sorted = [...salaries].sort((x, y) => {
+    const dx = x.effective_on ?? '';
+    const dy = y.effective_on ?? '';
+    if (dx !== dy) {
+      if (!dx) return 1;
+      if (!dy) return -1;
+      return dx < dy ? 1 : -1;
+    }
+    return (y.id ?? 0) - (x.id ?? 0);
+  });
+  const seen = new Set<string>();
+  return sorted.map((s) => {
+    const key = salaryGroupKey(s);
+    const current = !seen.has(key) && !!s.effective_on && s.effective_on <= today;
+    if (current) seen.add(key);
+    return { ...s, current };
+  });
+}
+
+function salaryAmount(s: PeopleForceSalary): string {
+  return `${s.amount ?? '?'} ${s.currency_code ?? ''}${s.per ? ` per ${s.per}` : ''}`.replace(/ +/g, ' ').trim();
+}
+
+export function formatSalaries(
+  salaries: PeopleForceSalary[],
+  today: string = new Date().toISOString().slice(0, 10),
+): string {
   if (salaries.length === 0) return 'No salary records found for this employee.';
-  const sorted = [...salaries].sort((x, y) => String(y.effective_on ?? '').localeCompare(String(x.effective_on ?? '')));
+  const marked = markCurrentSalaries(salaries, today);
+  const groups = new Map<string, Array<PeopleForceSalary & { current: boolean }>>();
+  for (const s of marked) {
+    const key = salaryGroupKey(s);
+    groups.set(key, [...(groups.get(key) ?? []), s]);
+  }
+  const summary: string[] = [];
+  for (const group of groups.values()) {
+    const label = groups.size > 1 ? ` (${group[0].compensation_component?.name ?? 'no component'})` : '';
+    const idx = group.findIndex((s) => s.current);
+    if (idx >= 0) {
+      const cur = group[idx];
+      const prev = group[idx + 1];
+      const before = prev ? ` (previously ${salaryAmount(prev)}${prev.effective_on ? `, from ${prev.effective_on}` : ''})` : '';
+      summary.push(`Current${label}: ${salaryAmount(cur)}, effective ${cur.effective_on}${before}`);
+    } else {
+      const next = [...group].reverse().find((s) => s.effective_on);
+      if (next) summary.push(`No current rate${label}: next ${salaryAmount(next)} from ${next.effective_on}`);
+    }
+  }
   const parts = ['# Salary History (newest first)', ''];
-  sorted.forEach((s, i) => {
+  if (summary.length) parts.push(...summary, '');
+  marked.forEach((s, i) => {
+    const status = s.current ? ' (current)' : s.effective_on && s.effective_on > today ? ' (scheduled)' : '';
     const per = s.per ? ` per ${s.per}` : '';
-    parts.push(`## ${i + 1}. ${s.amount ?? '?'} ${s.currency_code ?? ''}${per}`.trimEnd());
+    parts.push(`## ${i + 1}. ${s.amount ?? '?'} ${s.currency_code ?? ''}${per}`.trimEnd() + status);
     if (s.effective_on) parts.push(`Effective on: ${s.effective_on}`);
     if (s.compensation_component?.name) parts.push(`Component: ${s.compensation_component.name}${s.compensation_component.frequency ? ` (${s.compensation_component.frequency})` : ''}`);
     if (s.pay_schedule?.name) parts.push(`Pay schedule: ${s.pay_schedule.name}`);

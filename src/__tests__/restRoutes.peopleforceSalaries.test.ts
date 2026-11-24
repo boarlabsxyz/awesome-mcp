@@ -35,6 +35,7 @@ describe('REST data plane: PeopleForce salaries gate', () => {
   let unlistedKey: string;
   let urls: string[] = [];
   let upstreamStatus = 200;
+  let upstreamData: unknown[] = [{ id: 1, effective_on: '2026-01-01', amount: '1234.00', currency_code: 'EUR', per: 'month' }];
   const saved: Record<string, string | undefined> = {};
 
   async function connect(email: string, googleId: string): Promise<string> {
@@ -65,13 +66,14 @@ describe('REST data plane: PeopleForce salaries gate', () => {
     process.env.PEOPLEFORCE_COMPENSATION_EMAILS = 'PF-HR@example.com';
     urls = [];
     upstreamStatus = 200;
+    upstreamData = [{ id: 1, effective_on: '2026-01-01', amount: '1234.00', currency_code: 'EUR', per: 'month' }];
     globalThis.fetch = (async (url: any, init: any) => {
       // supertest talks to a local ephemeral server through the same global
       // fetch only if it uses it; record only PeopleForce traffic.
       if (String(url).includes('peopleforce')) urls.push(String(url));
       return new Response(
         JSON.stringify(upstreamStatus === 200
-          ? { data: [{ id: 1, effective_on: '2026-01-01', amount: '1234.00', currency_code: 'EUR', per: 'month' }] }
+          ? { data: upstreamData }
           : { error: 'forbidden' }),
         { status: upstreamStatus, headers: { 'content-type': 'application/json' } },
       );
@@ -103,6 +105,17 @@ describe('REST data plane: PeopleForce salaries gate', () => {
     assert.equal(res.body.data[0].amount, '1234.00');
     assert.equal(urls.length, 1);
     assert.match(urls[0], /\/employees\/7\/salaries/);
+  });
+
+  it('returns salaries newest first with a current flag', async () => {
+    upstreamData = [
+      { id: 1, effective_on: '2000-01-01', amount: '10.00' },
+      { id: 3, effective_on: '2999-01-01', amount: '30.00' },
+      { id: 2, effective_on: '2001-01-01', amount: '20.00' },
+    ];
+    const res = await get(listedKey);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.data.map((s: any) => [s.id, s.current]), [[3, false], [2, true], [1, false]]);
   });
 
   it('serves an admin who is not on the compensation list', async () => {

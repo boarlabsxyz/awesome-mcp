@@ -8227,7 +8227,7 @@ function registerRestApiRoutes(app: express.Express): void {
       if (!token) return;
       const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
       const result = await client.listEmployeeSalaries(req.params.employeeId as string);
-      respondNegotiated(req, res, result, () => helpers.formatSalaries(result.data ?? []));
+      respondNegotiated(req, res, { ...result, data: helpers.markCurrentSalaries(result.data ?? []) }, () => helpers.formatSalaries(result.data ?? []));
     } catch (err: any) {
       console.error('Error listing PeopleForce employee salaries:', err);
       if (err?.status === 403) {

@@ -6,6 +6,7 @@ import {
   formatEmployeeAbsences,
   formatHolidayList,
   formatSalaries,
+  markCurrentSalaries,
   ABSENCE_PAGE_LIMIT,
 } from '../../peopleforce/apiHelpers.js';
 import {
@@ -48,6 +49,80 @@ describe('salaries', () => {
     ]);
     assert.ok(out.indexOf('1200.00 EUR per month') < out.indexOf('1000.00 EUR per month'));
     assert.match(out, /Component: Base/);
+  });
+
+  const TODAY = '2026-11-24';
+  const hourly = (id: number, on: string, amount: string, extra: object = {}) =>
+    ({ id, effective_on: on, amount, currency_code: 'USD', per: 'hour', ...extra });
+
+  test('summarises the current rate and the previous one', () => {
+    const out = formatSalaries([hourly(1, '2026-01-01', '22.00'), hourly(2, '2026-05-01', '28.00')], TODAY);
+    assert.ok(out.includes('Current: 28.00 USD per hour, effective 2026-05-01 (previously 22.00 USD per hour, from 2026-01-01)'));
+    assert.match(out, /## 1\. 28\.00 USD per hour \(current\)/);
+    assert.doesNotMatch(out, /## 2\. .*\((current|scheduled)\)/);
+  });
+
+  test('a future-dated record is scheduled, not current', () => {
+    const out = formatSalaries([hourly(1, '2026-01-01', '22.00'), hourly(2, '2027-01-01', '30.00')], TODAY);
+    assert.match(out, /## 1\. 30\.00 USD per hour \(scheduled\)/);
+    assert.match(out, /## 2\. 22\.00 USD per hour \(current\)/);
+    assert.ok(out.includes('Current: 22.00 USD per hour, effective 2026-01-01'));
+  });
+
+  test('reports no current rate when everything is in the future', () => {
+    const out = formatSalaries([hourly(1, '2027-06-01', '31.00'), hourly(2, '2027-01-01', '30.00')], TODAY);
+    assert.ok(out.includes('No current rate: next 30.00 USD per hour from 2027-01-01'));
+  });
+
+  test('components are separate groups', () => {
+    const base = { id: 1, name: 'Base' };
+    const bonus = { id: 2, name: 'Bonus' };
+    const out = formatSalaries([
+      hourly(1, '2026-01-01', '22.00', { compensation_component: base }),
+      hourly(2, '2026-06-01', '500.00', { compensation_component: bonus }),
+    ], TODAY);
+    assert.ok(out.includes('Current (Base): 22.00 USD per hour, effective 2026-01-01'));
+    assert.ok(out.includes('Current (Bonus): 500.00 USD per hour, effective 2026-06-01'));
+    assert.equal((out.match(/\(current\)/g) ?? []).length, 2);
+  });
+
+  test('a record without a component is its own group, apart from an explicit Base', () => {
+    const out = formatSalaries([
+      hourly(1, '2026-01-01', '22.00'),
+      hourly(2, '2026-02-01', '25.00', { compensation_component: { id: 1, name: 'Base' } }),
+    ], TODAY);
+    assert.ok(out.includes('Current (no component): 22.00 USD per hour, effective 2026-01-01'));
+    assert.ok(out.includes('Current (Base): 25.00 USD per hour, effective 2026-02-01'));
+  });
+
+  test('a single record has no previously clause', () => {
+    const out = formatSalaries([hourly(1, '2026-01-01', '22.00')], TODAY);
+    assert.ok(out.includes('Current: 22.00 USD per hour, effective 2026-01-01'));
+    assert.doesNotMatch(out, /previously/);
+  });
+
+  test('equal dates are broken by id, higher id first and current', () => {
+    const out = markCurrentSalaries([hourly(5, '2026-01-01', '1.00'), hourly(9, '2026-01-01', '2.00')], TODAY);
+    assert.deepEqual(out.map((s) => [s.id, s.current]), [[9, true], [5, false]]);
+  });
+
+  test('markCurrentSalaries does not mutate its input and marks one current per group', () => {
+    const input = [
+      hourly(1, '2025-01-01', '1.00'), hourly(2, '2026-01-01', '2.00'), hourly(3, '2999-01-01', '3.00'),
+      hourly(4, '2026-03-01', '4.00', { compensation_component: { id: 7, name: 'Bonus' } }),
+      { id: 5, amount: '9.00' },
+    ];
+    const snapshot = JSON.stringify(input);
+    const out = markCurrentSalaries(input, TODAY);
+    assert.equal(JSON.stringify(input), snapshot);
+    assert.ok(input.every((s) => !('current' in s)));
+    assert.deepEqual(out.map((s) => s.id), [3, 4, 2, 1, 5]);
+    assert.deepEqual(out.filter((s) => s.current).map((s) => s.id).sort(), [2, 4]);
+  });
+
+  test('every field of a record reaches the output', () => {
+    const out = formatSalaries([hourly(1, '2026-01-01', '22.00', { comment: 'Annual review' })], TODAY);
+    for (const needle of ['22.00', 'USD', 'hour', '2026-01-01', 'Annual review']) assert.ok(out.includes(needle), needle);
   });
 });
 
