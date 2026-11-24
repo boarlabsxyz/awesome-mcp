@@ -179,11 +179,12 @@ async function generateFromAI() {
 
   const systemPrompt = [
     'You write release notes for Awesome MCP, a hosted platform that gives Claude and ChatGPT users access to their Google Docs, Sheets, Calendar, Drive, Outline wiki, ClickUp, PeopleForce HR, and other services through MCP.',
-    'Readers are non-technical end users. They care about:',
+    'Most readers are non-technical end users; some are developers who script against the REST API (curl-able /api/v1 endpoints). They care about:',
     '  - New integrations or services now available',
     '  - New capabilities on an existing integration (e.g. "Docs can now export to PDF")',
     '  - New pages, UI, or design changes on the website',
     '  - Bug fixes that USERS actually notice (a feature that was broken now works)',
+    '  - REST API changes: new or changed /api/v1 endpoints (commits scoped rest, or naming endpoints, routes or the REST plane)',
     'They do NOT care about:',
     '  - Internal refactors, dependency bumps, CI, tests, build tooling, lint fixes',
     '  - Backend plumbing, code cleanup, log-line tweaks, type-safety changes',
@@ -221,7 +222,8 @@ async function generateFromAI() {
     '',
     'Rules:',
     '- If nothing in the commit list is user-facing, set hasUserFacingChanges to false, primaryTag to "improvement", and sections to an empty array.',
-    '- Filter aggressively. Prefer omitting a bullet to including a technical one.',
+    '- Filter aggressively. Prefer omitting a bullet to including a technical one. REST API changes are the exception: never drop them.',
+    '- Put REST API changes in their own section headed "REST API", one bullet per connector, saying what can now be done over the API. A REST endpoint for an existing tool is NOT a new tool: do not list it under What\'s New as if the capability were new.',
     '- Omit every admin-side change, including new features and bug fixes, and treat commits scoped to admin, admin-mcp, or usage as admin-side. If a commit mixes admin-side and user-facing work, describe only the user-facing part.',
     '- "Admin" here means platform admins only. Keep changes that affect regular users, even if the word appears (e.g. "Fixed Redmine time entries not loading for non-admin accounts").',
     '- primaryTag = "feature" if any new capability, else "fix" if only user-visible bug fixes, else "improvement".',
