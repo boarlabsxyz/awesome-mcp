@@ -167,8 +167,8 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `listWorkspaces` | `GET /api/v1/clickup/workspaces` | live | List ClickUp workspaces |
 | `listSpaces` | `GET /api/v1/clickup/workspaces/{workspaceId}/spaces` | live | List spaces in a workspace |
 | `listFolders` | `GET /api/v1/clickup/spaces/{spaceId}/folders` | live | List folders in a space |
-| `listListsInFolder` | `GET /api/v1/clickup/folders/{folderId}/lists` | live | List lists in a folder |
-| `listFolderlessLists` | `GET /api/v1/clickup/spaces/{spaceId}/lists` | live | List folderless lists in a space |
+| `listLists` | `GET /api/v1/clickup/folders/{folderId}/lists` | live | List lists in a folder |
+| `listLists` | `GET /api/v1/clickup/spaces/{spaceId}/lists` | live | List folderless lists in a space |
 | `listTasks` | `GET /api/v1/clickup/lists/{listId}/tasks` | live | List tasks in a list |
 | `getTask` | `GET /api/v1/clickup/tasks/{taskId}` | live | Get a ClickUp task (JSON or markdown via Accept) |
 | `getAccessibleCustomFields` | `GET /api/v1/clickup/lists/{listId}/fields` | live | List accessible custom fields on a list |

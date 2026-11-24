@@ -9,8 +9,8 @@
 // Run after editing tool descriptions:
 //   node scripts/buildMcpToolsDoc.mjs
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -104,34 +104,49 @@ function loadRestCatalog() {
 // counting (skipping over string literals) so we don't get confused by curly
 // braces inside Zod schemas or example strings.
 //
-// Besides the raw `.addTool({ … })` registration, some servers register tools
+// Besides the raw `.addTool({ … })` registration, servers register tools
 // through thin wrapper helpers whose call sites still pass a literal `name:` +
-// `description:` (e.g. PeopleForce's addPaginatedListTool /
-// addEmployeeScopedListTool / addCandidateScopedListTool). We match those call
-// sites too so helper-registered tools aren't silently dropped from the doc.
-// The helpers' own definitions call `.addTool({ name: config.name })` — those
-// blocks have no literal name and are harmlessly skipped as unparseable.
+// `description:` (PeopleForce's addPaginatedListTool, HubSpot's
+// addRecentListTool / addSearchTool, supabaseTool, …). Any call of an
+// identifier ending in `Tool` followed by `({` counts, so a new helper is found
+// without a list to keep in step: a fixed list silently dropped HubSpot's
+// helpers from this doc. A helper's own definition (`function addXTool(config:`)
+// has no `({` and is not matched; the `.addTool({ name: config.name })` inside
+// it has no literal name and is harmlessly skipped as unparseable.
 // ---------------------------------------------------------------------------
 
-const REGISTRATION_OPENERS = [
-  'addTool',
-  'addPaginatedListTool',
-  'addEmployeeScopedListTool',
-  'addCandidateScopedListTool',
-  // PeopleForce v4's equivalents.
-  'addListTool',
-  'addGetTool',
-  'addPersonScopedListTool',
-  'addNamedCreateTool',
-  'addNamedUpdateTool',
-  'supabaseTool',
-];
+const REGISTRATION_OPENER = /\b[A-Za-z]*Tool\(\s*\{/g;
+
+/** Whole-line `//` comments first, then block comments: the order is
+ *  load-bearing (see sharedToolsRegistration.test.ts). A comment that quotes a
+ *  call such as `supabaseTool({...})` must not open a block. */
+function stripComments(src) {
+  return src.replace(/^[ \t]*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * The server file plus every module it imports that registers tools itself,
+ * e.g. src/slack/workspaceTools.ts, which both Slack servers call into. Shared
+ * tools have their own section, and another server.ts is never followed
+ * (src/google-docs/server.ts is the app entry point and imports them all).
+ */
+function toolSourceFiles(file) {
+  const files = [file];
+  const src = stripComments(readFileSync(join(root, file), 'utf8'));
+  for (const m of src.matchAll(/from\s+'(\.{1,2}\/[^']+)\.js'/g)) {
+    const candidate = relative(root, resolve(dirname(join(root, file)), `${m[1]}.ts`));
+    if (candidate.startsWith('src/sharedTools/') || candidate.endsWith('/server.ts') || !existsSync(join(root, candidate))) continue;
+    REGISTRATION_OPENER.lastIndex = 0;
+    if (REGISTRATION_OPENER.test(stripComments(readFileSync(join(root, candidate), 'utf8')))) files.push(candidate);
+  }
+  return files;
+}
 
 function findAddToolBlocks(src) {
   const blocks = [];
   // Require `(` immediately after the name so generic helper *definitions*
   // (`function addPaginatedListTool<T>(config: {`) aren't matched — only calls.
-  const opener = new RegExp(`(?:${REGISTRATION_OPENERS.join('|')})\\(\\s*\\{`, 'g');
+  const opener = new RegExp(REGISTRATION_OPENER.source, 'g');
   let m;
   while ((m = opener.exec(src)) !== null) {
     const start = m.index + m[0].length;
@@ -301,26 +316,31 @@ const restMap = loadRestCatalog();
 const sections = new Map();      // sectionTitle → { title, files: Set<string>, tools: [] }
 let grandTotal = 0;
 
-for (const [file, title, serviceKey, autoRegistered] of SERVICES) {
-  const fullPath = join(root, file);
-  const src = readFileSync(fullPath, 'utf8');
-  const blocks = findAddToolBlocks(src);
+for (const [serverFile, title, serviceKey, autoRegistered] of SERVICES) {
+  const sourceFiles = autoRegistered ? [serverFile] : toolSourceFiles(serverFile);
   const newTools = [];
-  for (const block of blocks) {
-    const name = extractName(block);
-    const description = extractDescription(block);
-    if (!name || !description) {
-      console.warn(`[buildMcpToolsDoc] Skipping unparseable addTool block in ${file}`);
-      continue;
+  for (const file of sourceFiles) {
+    const blocks = findAddToolBlocks(stripComments(readFileSync(join(root, file), 'utf8')));
+    for (const block of blocks) {
+      const name = extractName(block);
+      if (!name) {
+        // A helper's own definition (`name: opts.name`), not a tool.
+        console.warn(`[buildMcpToolsDoc] Skipping unparseable addTool block in ${file}`);
+        continue;
+      }
+      // A helper call (HubSpot's addRecentListTool) can pass a literal name and
+      // build the description from a template. List the tool anyway: dropping it
+      // made the doc say the tool does not exist.
+      const description = extractDescription(block) ?? 'Description composed by a registration helper; see the source.';
+      newTools.push({ name, description });
     }
-    newTools.push({ name, description });
   }
   let section = sections.get(title);
   if (!section) {
     section = { title, files: [], tools: [], serviceKey, autoRegistered };
     sections.set(title, section);
   }
-  section.files.push(file);
+  section.files.push(...sourceFiles.filter(f => !section.files.includes(f)));
   // Dedup by tool name within the same section (the shared tools file pair
   // would otherwise show twice).
   for (const t of newTools) {
