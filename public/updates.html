@@ -188,7 +188,7 @@
         <ul>
           <li><strong>Google Drive:</strong> Create folders, copy, move, rename, trash and share files, and create a Google Doc from a template with text replacements, straight from scripts with <code>curl</code> (spec: <a href="/openapi-drive.json">openapi-drive.json</a>)</li>
           <li><strong>Google Slides:</strong> Create presentations and apply whole batches of slide changes in one request, up to 5 MB (spec: <a href="/openapi-slides.json">openapi-slides.json</a>)</li>
-          <li><strong>Google Drive:</strong> Trash never deletes permanently over the API, and sharing (including public links) works with your dashboard API key, so keep that key private</li>
+          <li><strong>Google Drive:</strong> The new trash endpoint only moves files to the trash, but the existing <code>DELETE /api/v1/drive/files/{fileId}</code> still deletes permanently when you pass <code>permanent=true</code>. Both, and sharing (including public links), work with your dashboard API key, so keep that key private</li>
         </ul>
         <h3>Improvements</h3>
         <ul>
