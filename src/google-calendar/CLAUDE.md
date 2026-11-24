@@ -30,6 +30,7 @@
 - **`queryFreeBusy` reports a calendar Google returned `errors` for — or omitted — as Unknown, never free** — an unreadable calendar is not an available one.
 - **More than 50 ids is refused locally** — Google's per-query calendar limit. Empty ids and `timeMax <= timeMin` are refused too.
 - **`groups` (group expansion) is not supported** — no `groupIds` parameter.
+- **REST: `GET /api/v1/calendars/freebusy?calendarIds=a,b`** runs `performQueryFreeBusy`, the tool's op: request order, and an unread or omitted calendar is `busy: null` with its reasons in `errors`, never `[]`. Window and id-count refusals are 400 before Google is called.
 
 ## Source Files
 

@@ -28,7 +28,7 @@ Collections with enforced schemas, kept in this platform's own Postgres, so Clau
 ### REST plane
 
 - **`createServiceAuth('storage')` builds `createStorageSession` from the caller alone,** with or without a Storage connection, and never takes the Google fallback: the data is keyed by the user id, so a bearer minted on any of the user's connectors reaches their own records and nobody else's.
-- **Writes are insert and update only.** deleteRecords, migrateCollection and dropCollection stay MCP-only on purpose (the client can confirm them; a curl cannot), while the permanent dashboard API key can call the two that are exposed.
+- **Writes are createCollection, insert and update.** deleteRecords, migrateCollection and dropCollection stay MCP-only on purpose (the client can confirm them; a curl cannot), while the permanent dashboard API key can call the three that are exposed. `POST /collections` (owner request for full coverage of non-destructive writes) takes the tool arguments as the body, the name included; a taken name is a 400.
 - **Status comes from a tag, not the message.** `statusError` in `ops.ts` puts 404 (missing collection or record) or 503 (no database) on the UserError's `code`; `storageErrorResponse` (`restRoutes.ts`) answers that, any other UserError as 400 with its message, and anything else as a 500 that hides it.
 - **The path picks the record.** `/records/{recordId}` is the `_id`, or the keyField value with `?by=key`; an `id`/`key` in an update body is dropped. `/api/v1/storage` is in `REST_LARGE_BODY_PREFIXES` (5 MB) for bulk inserts.
 - **`public/openapi-storage.json`** carries the request bodies; it was scaffolded once from `schemas.ts` with zod-to-json-schema and is maintained by hand, so update it when a schema there changes.

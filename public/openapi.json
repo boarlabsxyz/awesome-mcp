@@ -942,6 +942,164 @@
         }
       }
     },
+    "/api/v1/clickup/workspaces/{workspaceId}/subscription": {
+      "post": {
+        "operationId": "subscribeToTaskEvents",
+        "summary": "Subscribe to task events for a workspace, creating a ClickUp webhook",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Creates a ClickUp webhook that calls this server back and stores its shared secret, which is never returned. Idempotent per user and workspace: 201 when a webhook was created, 200 with the existing subscription otherwise. Events default to taskCreated, taskStatusUpdated, taskAssigneeUpdated, taskMoved and taskDeleted. 503 when the server has no BASE_URL.",
+        "parameters": [
+          {
+            "name": "workspaceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The workspace (team) ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "taskCreated",
+                        "taskStatusUpdated",
+                        "taskAssigneeUpdated",
+                        "taskMoved",
+                        "taskDeleted"
+                      ]
+                    },
+                    "description": "Event types to subscribe to. Defaults to all five in the recommended bundle."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already subscribed; the existing subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Subscription created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "created",
+                        "existing"
+                      ]
+                    },
+                    "subscription": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer"
+                        },
+                        "workspaceId": {
+                          "type": "string"
+                        },
+                        "clickupWebhookId": {
+                          "type": "string"
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "failCount": {
+                          "type": "integer"
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "callbackUrl": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by ClickUp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workspace not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "BASE_URL is not configured on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clickup/user": {
       "get": {
         "operationId": "getAuthorizedUser",
@@ -9745,6 +9903,115 @@
         }
       }
     },
+    "/api/v1/drive/documents": {
+      "post": {
+        "operationId": "createDriveDocument",
+        "summary": "Create a Google Doc, optionally with initial text",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Not idempotent: each call creates another document. Works with shared drives. Answers 201 even when the text insert failed, because the document exists by then: initialContentWritten is false with initialContentError, and null when no text was sent. Body limit 5mb.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title for the new document."
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive."
+                  },
+                  "initialContent": {
+                    "type": "string",
+                    "description": "Initial text content to add to the document."
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "webViewLink": {
+                      "type": "string"
+                    },
+                    "driveId": {
+                      "type": "string"
+                    },
+                    "initialContentWritten": {
+                      "type": "boolean",
+                      "nullable": true
+                    },
+                    "initialContentError": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Parent folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/drive/files/{fileId}": {
       "get": {
         "operationId": "getFileInfo",
@@ -17510,6 +17777,402 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/deals/search": {
+      "post": {
+        "operationId": "searchHubSpotDeals",
+        "summary": "Search HubSpot deals by free text and property filters",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Free-text search across the default searchable properties (e.g. dealname)."
+                  },
+                  "filters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "propertyName": {
+                          "type": "string",
+                          "description": "Property to filter on (e.g. domain, email, industry)."
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "EQ",
+                            "NEQ",
+                            "LT",
+                            "LTE",
+                            "GT",
+                            "GTE",
+                            "CONTAINS_TOKEN",
+                            "NOT_CONTAINS_TOKEN",
+                            "HAS_PROPERTY",
+                            "NOT_HAS_PROPERTY"
+                          ],
+                          "default": "EQ",
+                          "description": "Comparison operator (default EQ)."
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY."
+                        }
+                      },
+                      "required": [
+                        "propertyName"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Optional property filters, ANDed together."
+                  },
+                  "properties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Properties to return per match (defaults to dealname, amount, dealstage, pipeline, closedate). Every requested property is rendered — unset ones as \"(empty)\" — and any HubSpot does not return is listed in a note."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 10,
+                    "description": "Maximum matches to return (default 10, max 100)."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CrmObject"
+                      }
+                    },
+                    "paging": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or neither query nor filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing HubSpot scope (needed and granted scopes are named)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/contacts/search": {
+      "post": {
+        "operationId": "searchHubSpotContacts",
+        "summary": "Search HubSpot contacts by free text and property filters",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Free-text search across the default searchable properties (e.g. name, email, phone)."
+                  },
+                  "filters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "propertyName": {
+                          "type": "string",
+                          "description": "Property to filter on (e.g. domain, email, industry)."
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "EQ",
+                            "NEQ",
+                            "LT",
+                            "LTE",
+                            "GT",
+                            "GTE",
+                            "CONTAINS_TOKEN",
+                            "NOT_CONTAINS_TOKEN",
+                            "HAS_PROPERTY",
+                            "NOT_HAS_PROPERTY"
+                          ],
+                          "default": "EQ",
+                          "description": "Comparison operator (default EQ)."
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY."
+                        }
+                      },
+                      "required": [
+                        "propertyName"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Optional property filters, ANDed together."
+                  },
+                  "properties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Properties to return per match (defaults to firstname, lastname, email, company, phone). Every requested property is rendered — unset ones as \"(empty)\" — and any HubSpot does not return is listed in a note."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 10,
+                    "description": "Maximum matches to return (default 10, max 100)."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CrmObject"
+                      }
+                    },
+                    "paging": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or neither query nor filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing HubSpot scope (needed and granted scopes are named)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/companies/search": {
+      "post": {
+        "operationId": "searchHubSpotCompanies",
+        "summary": "Search HubSpot companies by free text and property filters",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Free-text search across the default searchable properties (e.g. name, domain, phone)."
+                  },
+                  "filters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "propertyName": {
+                          "type": "string",
+                          "description": "Property to filter on (e.g. domain, email, industry)."
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "EQ",
+                            "NEQ",
+                            "LT",
+                            "LTE",
+                            "GT",
+                            "GTE",
+                            "CONTAINS_TOKEN",
+                            "NOT_CONTAINS_TOKEN",
+                            "HAS_PROPERTY",
+                            "NOT_HAS_PROPERTY"
+                          ],
+                          "default": "EQ",
+                          "description": "Comparison operator (default EQ)."
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY."
+                        }
+                      },
+                      "required": [
+                        "propertyName"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Optional property filters, ANDed together."
+                  },
+                  "properties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Properties to return per match (defaults to name, domain, website, phone, industry). Every requested property is rendered — unset ones as \"(empty)\" — and any HubSpot does not return is listed in a note."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 10,
+                    "description": "Maximum matches to return (default 10, max 100)."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CrmObject"
+                      }
+                    },
+                    "paging": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or neither query nor filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing HubSpot scope (needed and granted scopes are named)",
             "content": {
               "application/json": {
                 "schema": {
@@ -35644,6 +36307,288 @@
         }
       }
     },
+    "/api/v1/sheets/{spreadsheetId}/cells/update-by-field": {
+      "post": {
+        "operationId": "updateCellByFieldName",
+        "summary": "Find a row by a column value and write one field of it, named by header",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Row 1 holds the headers. Finds the first row whose searchColumn equals searchValue and writes newValue into the column headed fieldName, returning the old value. No matching row is a 404 and an unknown header a 400 with availableHeaders; neither writes anything. updatedCells 1 confirms the write.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "searchColumn": {
+                    "type": "string",
+                    "description": "Column letter to search in (e.g., \"A\")."
+                  },
+                  "searchValue": {
+                    "type": "string",
+                    "description": "The value to search for (exact match) to locate the row."
+                  },
+                  "fieldName": {
+                    "type": "string",
+                    "description": "The header name of the column to update."
+                  },
+                  "newValue": {
+                    "type": "string",
+                    "description": "The new value to write into the cell."
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "Sheet/tab name. Defaults to the first sheet."
+                  }
+                },
+                "required": [
+                  "searchColumn",
+                  "searchValue",
+                  "fieldName",
+                  "newValue"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cell updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "updated": {
+                      "type": "object",
+                      "properties": {
+                        "row": {
+                          "type": "integer"
+                        },
+                        "column": {
+                          "type": "string"
+                        },
+                        "cell": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "rowContext": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "oldValue": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "newValue": {
+                      "type": "string"
+                    },
+                    "updatedCells": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or fieldName is not a header (availableHeaders lists them)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found, or no row has searchValue in searchColumn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/sheets": {
+      "post": {
+        "operationId": "addSpreadsheetSheet",
+        "summary": "Add a tab to a spreadsheet, optionally sized",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Adds a sheet/tab. Google sizes a new tab at 1000 rows x 26 columns and a write does not grow the grid, so pass rowCount/columnCount when the data is bigger. Answers 201 with the sheet properties Google reports (sheetId, title, gridProperties). A tab name already in use is a 400.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sheetTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title for the new sheet/tab."
+                  },
+                  "rowCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Rows in the new tab (Google default: 1000). Set this to at least the number of rows you are about to write."
+                  },
+                  "columnCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Columns in the new tab (Google default: 26, i.e. A-Z)."
+                  }
+                },
+                "required": [
+                  "sheetTitle"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tab added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "sheetId": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "gridProperties": {
+                      "type": "object",
+                      "properties": {
+                        "rowCount": {
+                          "type": "integer"
+                        },
+                        "columnCount": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or Google refused the tab (e.g. a duplicate name)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Google answered with no sheet properties",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sheets": {
       "get": {
         "operationId": "listSpreadsheets",
@@ -36990,6 +37935,155 @@
       }
     },
     "/api/v1/storage/collections": {
+      "post": {
+        "operationId": "createStorageCollection",
+        "summary": "Create a collection with a fixed schema",
+        "description": "Admins only (ADMIN_EMAILS); others get 403. Shipped on the owner request for full REST coverage of non-destructive writes. The permanent dashboard API key can call it. Body is the createCollection tool arguments, the collection name included. Every record written later must match the schema exactly; it changes only through migrateCollection (MCP only).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "collection": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$",
+                    "description": "Collection name: starts with a letter, then letters, digits, _ or - (max 64 chars)."
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "What this collection is for, so a later conversation knows when to use it."
+                  },
+                  "fields": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "number",
+                            "integer",
+                            "boolean",
+                            "datetime",
+                            "url",
+                            "string[]",
+                            "number[]",
+                            "json"
+                          ],
+                          "description": "string, number, integer, boolean, datetime (ISO 8601), url, string[], number[], or json (any object or array, for nested data that needs no querying)."
+                        },
+                        "required": {
+                          "type": "boolean",
+                          "default": false,
+                          "description": "Whether every record must carry this field."
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500,
+                          "description": "What the field holds. Required: it is what a later conversation reads to understand the data."
+                        },
+                        "enum": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "minItems": 1,
+                          "maxItems": 100,
+                          "description": "Allowed values. Only for string and string[] fields."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "description"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "The collection's fields, by name. Names start with a letter and use letters, digits and _ (max 64 chars); at most 50 fields."
+                  },
+                  "keyField": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "A required string, url, integer or number field that uniquely identifies a record (e.g. profileUrl). Enables getRecord/updateRecord by key and insertRecords with onConflict \"update\"."
+                  },
+                  "ttlDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3650,
+                    "description": "After this many days without an update a record reads as _stale: true, meaning re-fetch it from the source."
+                  }
+                },
+                "required": [
+                  "collection",
+                  "description",
+                  "fields"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Collection created; its schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, a bad field definition, a name already in use, or the collection quota reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No database configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "operationId": "listStorageCollections",
         "summary": "List your storage collections with record counts and quotas",
@@ -37853,6 +38947,41 @@
         }
       }
     },
+    "/api/v1/calendars/freebusy": {
+      "get": {
+        "operationId": "queryFreeBusy",
+        "summary": "Busy intervals for one or more calendars in a time range",
+        "description": "Busy intervals for one or more calendars in a time range. Mirrors the MCP tool `queryFreeBusy`. Returns upstream JSON by default; pass Accept: text/plain for markdown. calendarIds is comma-separated (calendar ids or email addresses), default primary, max 50. Optional timeMin (default now), timeMax (default 7 days later) and timeZone. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free.",
+        "tags": [
+          "calendar"
+        ],
+        "parameters": [
+          {
+            "name": "calendarIds",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Busy intervals for one or more calendars in a time range (catalog: queryFreeBusy)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
     "/api/v1/drive/upload-sessions": {
       "post": {
         "operationId": "createDriveUploadSession",
@@ -38660,6 +39789,83 @@
         }
       }
     },
+    "/api/v1/slack/canvases/{canvasId}/sections": {
+      "get": {
+        "operationId": "findSlackCanvasSections",
+        "summary": "Find section ids in a canvas by text or header type",
+        "description": "Find section ids in a canvas by text or header type. Mirrors the MCP tool `findCanvasSections`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Query: containsText and/or sectionTypes (comma-separated h1, h2, h3, any_header); neither is a 400. The ids feed POST /api/v1/slack/canvases/{canvasId}/edit.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "canvasId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/files/{fileId}/download": {
+      "get": {
+        "operationId": "downloadSlackFile",
+        "summary": "Download the bytes of a file shared in a channel or DM",
+        "description": "Download the bytes of a file shared in a channel or DM. Mirrors the MCP tool `downloadFile`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Streams the raw bytes with the file Content-Type, up to 20 MB. channelId is required and the file must be shared there, else 403. A file hosted outside Slack, or one over the cap, is a 422.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channelId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Download the bytes of a file shared in a channel or DM (catalog: downloadSlackFile)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success (raw upstream JSON or rendered text)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          }
+        }
+      }
+    },
     "/api/v1/slack/lists/{listId}/items": {
       "get": {
         "operationId": "listSlackListItems",
@@ -38767,6 +39973,33 @@
           },
           "404": {
             "description": "Resource not found"
+          }
+        }
+      }
+    },
+    "/api/v1/slack/dms": {
+      "post": {
+        "operationId": "openSlackDm",
+        "summary": "Open or retrieve a 1-on-1 or group DM and return its channel id",
+        "description": "Open or retrieve a 1-on-1 or group DM and return its channel id. Mirrors the MCP tool `openDm`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Body { userId } or { userIds } (2-8), exactly one of them. 200 either way: Slack returns the DM when it is already open. Posts nothing, so not behind SLACK_WRITES_ENABLED. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), like the other Slack writes.",
+        "tags": [
+          "slack"
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
           }
         }
       }
@@ -39175,6 +40408,43 @@
         }
       }
     },
+    "/api/v1/browserbase/sessions/{sessionId}/act": {
+      "post": {
+        "operationId": "actOnBrowserPage",
+        "summary": "Perform one plain-language action on the current page",
+        "description": "Perform one plain-language action on the current page. Mirrors the MCP tool `act`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Body { action }. It clicks and submits forms on third-party sites with no confirmation step, and the permanent dashboard API key can call it. Domain rules do not apply, as on the MCP tool: an action names no destination, so the rules bind navigate only.",
+        "tags": [
+          "browserbase"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
     "/api/v1/browserbase/sessions/{sessionId}/observe": {
       "post": {
         "operationId": "observeBrowserPage",
@@ -39254,6 +40524,43 @@
         "operationId": "releaseBrowserSession",
         "summary": "Force a Browserbase session to close so it stops billing",
         "description": "Force a Browserbase session to close so it stops billing. Mirrors the MCP tool `forceEndBrowserSession`. Takes a JSON body and returns JSON. DESTRUCTIVE - anything in progress in that browser is lost, and there is no undo. Exposed with explicit user sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the only way to stop a session whose id outlived the conversation that made it, which is why withholding it would cost more than it saves.",
+        "tags": [
+          "browserbase"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Resource not found"
+          },
+          "2XX": {
+            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
+          }
+        }
+      }
+    },
+    "/api/v1/browserbase/sessions/{sessionId}/end": {
+      "post": {
+        "operationId": "endBrowserSession",
+        "summary": "Close a browser session cleanly so it stops billing",
+        "description": "Close a browser session cleanly so it stops billing. Mirrors the MCP tool `end`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Hosted end, then a REST release; when the hosted call fails the release alone closes it (closedVia release). billingStopped is true once a release was accepted and null when only the hosted end succeeded. Both failing is a 502.",
         "tags": [
           "browserbase"
         ],

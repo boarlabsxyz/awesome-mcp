@@ -18,7 +18,10 @@
 - **Matching is label-boundary hostname suffix, never glob** — `example.com` covers `app.example.com`, not `notexample.com`.
 - **Env:** owns only `BROWSERBASE_MCP_URL` and `BROWSERBASE_ENABLED`. `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID` belong to the unrelated e2e transport (`.github/workflows/e2e-smoke.yml`); the key here is per-connection.
 - **Hidden behind `BROWSERBASE_ENABLED`** — seeded with `isActive` from the flag (default `false`), strict `=== 'true'` (verified), restart not deploy. While hidden, existing connections keep working (`mcp:browserbase` stays in `scopeMap.ts`) but the dashboard row degrades: raw slug, fallback icon, `getMcpUrl` returns `''`.
-- **No `act` on REST** — it submits forms on third-party sites, the plane accepts the permanent dashboard API key, and curl has no confirmation.
+
+### REST plane
+- **`act` and `end` are on REST at the owner's request for full coverage of non-destructive writes** — so the permanent dashboard API key can submit forms on third-party sites with no confirmation step; accepted knowingly. `act` applies no domain rules, exactly as the MCP tool (rules bind `navigate` only); a route test pins that a restricted connection still acts.
+- **`end` runs `performEnd` (`restOps.ts`), which `opEnd` now renders** — hosted end, then always a release; `closedVia` and three-valued `billingStopped` (`null` = only the hosted end succeeded). Both failing is 502 (404 when the release says the session is gone). The route table answers a tagged 502 itself, since `sendUpstreamError` would say 500.
 
 ### Response safety (`responseSafety.ts`) — verified live
 - **Never forward upstream output verbatim.** `navigate` returns a ~15 KB CDP object with the connect websocket URL, `signingKey` JWTs and internal `*.svc.cluster.local` hosts, so it is **allowlisted** to `url` (echoed from the request), `status`, `title` — not redacted. Redaction is the backstop for `extract`/`observe`.

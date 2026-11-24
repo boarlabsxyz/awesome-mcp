@@ -12,6 +12,7 @@
 - **Batch per-operation rejection → 400**, matched on `err.name === 'UserError'` (webServer imports no FastMCP).
 - **`/write` maps upstream 400 → 400**, not via `sendUpstreamError` (which would say 500).
 - Cells accept numbers, booleans and nulls, not only strings.
+- **`addSpreadsheetSheet` and `updateCellByFieldName` are on REST at the owner's request for full coverage of non-destructive writes** (`POST /{id}/sheets`, `POST /{id}/cells/update-by-field`), past the old one-field decline. `updateCellByFieldName` answers 404 for no matching row and 400 (with `availableHeaders`) for an unknown header, writing nothing; the tool keeps its `success: false` JSON. `updatedCells` (REST only) confirms the write.
 
 ### Grid size (verified live)
 - **A new tab is 1000×26 and `values.update` never grows it** — `writeSpreadsheet` / `POST .../write` past row 1000 fail "exceeds grid limits"; `values.append` (`appendSpreadsheetRows`, `INSERT_ROWS`) does grow it (Google over-allocates). `writeRange` appends which route grows a grid to Google's error, matched on message text.
