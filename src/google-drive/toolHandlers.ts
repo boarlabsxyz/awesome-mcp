@@ -667,6 +667,44 @@ export async function handleDeleteFile(
   }
 }
 
+/**
+ * Create a blank Google Doc, then insert `initialContent` if given. Shared by the
+ * createDocument tool and POST /api/v1/drive/documents.
+ *
+ * The content step failing does not fail the call: the document exists by then,
+ * and an error would invite a retry that makes a second one. `initialContent`
+ * reports it instead — null when none was asked for.
+ */
+export async function performCreateDocument(
+  drive: drive_v3.Drive,
+  docsGetter: () => docs_v1.Docs,
+  args: { title: string; parentFolderId?: string; initialContent?: string },
+): Promise<{ document: drive_v3.Schema$File; initialContent: { written: true } | { written: false; error: string } | null }> {
+  const documentMetadata: drive_v3.Schema$File = {
+    name: args.title,
+    mimeType: 'application/vnd.google-apps.document',
+  };
+  if (args.parentFolderId) documentMetadata.parents = [args.parentFolderId];
+  const response = await drive.files.create({
+    requestBody: documentMetadata,
+    supportsAllDrives: true,
+    fields: 'id,name,webViewLink,driveId',
+  });
+  const document = response.data;
+  if (!args.initialContent) return { document, initialContent: null };
+  try {
+    await docsGetter().documents.batchUpdate({
+      documentId: document.id!,
+      requestBody: {
+        requests: [{ insertText: { location: { index: 1 }, text: args.initialContent } }],
+      },
+    });
+    return { document, initialContent: { written: true } };
+  } catch (contentError: any) {
+    return { document, initialContent: { written: false, error: contentError?.message || String(contentError) } };
+  }
+}
+
 export async function handleCreateDocument(
   drive: drive_v3.Drive,
   docsGetter: () => docs_v1.Docs,
@@ -675,33 +713,14 @@ export async function handleCreateDocument(
 ): Promise<string> {
   log.info(`Creating new document "${args.title}"`);
   try {
-    const documentMetadata: drive_v3.Schema$File = {
-      name: args.title,
-      mimeType: 'application/vnd.google-apps.document',
-    };
-    if (args.parentFolderId) documentMetadata.parents = [args.parentFolderId];
-    const response = await drive.files.create({
-      requestBody: documentMetadata,
-      supportsAllDrives: true,
-      fields: 'id,name,webViewLink,driveId',
-    });
-    const document = response.data;
+    const { document, initialContent } = await performCreateDocument(drive, docsGetter, args);
     const locationInfo = document.driveId ? ` (in shared drive ID: ${document.driveId})` : '';
     let result = `Successfully created document "${document.name}" (ID: ${document.id})${locationInfo}\nView Link: ${document.webViewLink}`;
-    if (args.initialContent) {
-      try {
-        const docs = docsGetter();
-        await docs.documents.batchUpdate({
-          documentId: document.id!,
-          requestBody: {
-            requests: [{ insertText: { location: { index: 1 }, text: args.initialContent } }],
-          },
-        });
-        result += `\n\nInitial content added to document.`;
-      } catch (contentError: any) {
-        log.warn(`Document created but failed to add initial content: ${contentError.message}`);
-        result += `\n\nDocument created but failed to add initial content. You can add content manually.`;
-      }
+    if (initialContent?.written) {
+      result += `\n\nInitial content added to document.`;
+    } else if (initialContent) {
+      log.warn(`Document created but failed to add initial content: ${initialContent.error}`);
+      result += `\n\nDocument created but failed to add initial content. You can add content manually.`;
     }
     return result;
   } catch (error: any) {

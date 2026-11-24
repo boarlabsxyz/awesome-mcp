@@ -354,7 +354,8 @@ export async function subscribeToTaskEventsFlow(
       events: input.events,
     });
   } catch (err: any) {
-    throw new Error(`Failed to create ClickUp webhook: ${err?.message || err}`);
+    // `cause` keeps the ClickUp error, whose status the REST route reads back.
+    throw new Error(`Failed to create ClickUp webhook: ${err?.message || err}`, { cause: err });
   }
 
   // 3. Extract creds. Response shape varies; extractor also redacts secrets

@@ -51,44 +51,21 @@ const MCP_ONLY: Partial<Record<RestService, Record<string, string>>> = {
     rejectSuggestion: DESTRUCTIVE,
   },
   sheets: {
-    addSpreadsheetSheet: PREDATES,
     deleteSpreadsheetRowsOrColumns: DESTRUCTIVE,
-    updateCellByFieldName: PREDATES,
-  },
-  calendar: {
-    queryFreeBusy: PREDATES,
-  },
-  drive: {
-    createDocument: PREDATES,
   },
   gmail: {
     deleteFilter: DESTRUCTIVE,
   },
   clickup: {
-    subscribeToTaskEvents: PREDATES,
     unsubscribeFromTaskEvents: DESTRUCTIVE,
-  },
-  slack: {
-    downloadFile: PREDATES,
-    findCanvasSections: PREDATES,
-    openDm: PREDATES,
   },
   outline: {
     deleteCollection: DESTRUCTIVE,
     deleteComment: DESTRUCTIVE,
     deleteDocument: DESTRUCTIVE,
   },
-  hubspot: {
-    searchCompanies: PREDATES,
-    searchContacts: PREDATES,
-    searchDeals: PREDATES,
-  },
   redmine: {
     deleteProject: DESTRUCTIVE,
-  },
-  browserbase: {
-    act: PREDATES,
-    end: PREDATES,
   },
   supabase: {
     apply_migration: DESTRUCTIVE,
@@ -114,7 +91,6 @@ const MCP_ONLY: Partial<Record<RestService, Record<string, string>>> = {
     update_storage_config: DESTRUCTIVE,
   },
   storage: {
-    createCollection: PREDATES,
     deleteRecords: DESTRUCTIVE,
     dropCollection: DESTRUCTIVE,
     migrateCollection: DESTRUCTIVE,

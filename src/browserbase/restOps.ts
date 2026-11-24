@@ -10,11 +10,12 @@
 // shared with the MCP tools, so the two surfaces cannot disagree about what is
 // valid.
 //
-// Note which tools are NOT here. `act` has no REST sibling on purpose — it
-// submits forms on third-party systems, this plane accepts the permanent
-// dashboard API key, and a curl has no confirmation affordance. `end` has none
-// either, because releaseSession reaches the same operation by id and works in
-// states the proxy call does not. See the notes in src/restCatalog.ts.
+// `act` and `end` joined this plane on the owner request for full REST
+// coverage of non-destructive writes. `act` submits forms and clicks buttons on
+// third-party systems and the plane accepts the permanent dashboard API key,
+// with no confirmation affordance behind a curl; that was accepted knowingly.
+// `end` is the clean shutdown (hosted end, then a release); `release` stays the
+// by-id force-close that works when no browser-control session holds it.
 
 import {
   BrowserbaseClient,
@@ -25,6 +26,7 @@ import { BrowserbaseAccessRules, assertDomainAllowed } from './accessRules.js';
 import {
   extractNavigationFacts,
   renderPayload,
+  safeErrorText,
   sanitize,
   unwrapEnvelope,
 } from './responseSafety.js';
@@ -180,4 +182,84 @@ export async function performExtract(
     sessionId,
   });
   return { sessionId, result: safePayload(text) };
+}
+
+/**
+ * One action on the current page. Domain rules are NOT applied, for the same
+ * reason as on the MCP side: an action names no destination, so a rule could
+ * only be checked against a page the browser is already on. The rules bind
+ * navigate, and the act description says an action can lead off-list.
+ */
+export async function performAct(
+  proxy: HostedProxy,
+  sessionId: string,
+  args: { action: string },
+): Promise<PageActionResult> {
+  const text = await proxy('act', { action: args.action, sessionId });
+  return { sessionId, result: safePayload(text) };
+}
+
+export interface EndResult {
+  sessionId: string;
+  closed: true;
+  /** `end` when the hosted call closed it; `release` when that failed and the REST release did. */
+  closedVia: 'end' | 'release';
+  /**
+   * true once Browserbase accepted a release. null when only the hosted end
+   * succeeded: a keep-alive session can survive it, so whether it still bills
+   * is unknown rather than false.
+   */
+  billingStopped: true | null;
+  /** Why the hosted end failed, when closedVia is release. */
+  endError?: string;
+  /** Why the follow-up release was refused, when billingStopped is null. */
+  releaseError?: string;
+  dashboardUrl: string;
+}
+
+const errorText = (err: any): string => safeErrorText(err?.message ?? String(err));
+
+/**
+ * Close a session by id: the hosted `end`, then always a REST release, because a
+ * keep-alive session may survive the hosted call. When the hosted call fails the
+ * release is the fallback. Shared with the MCP tool (opEnd renders this), so the
+ * two surfaces cannot disagree about when a session counts as closed.
+ *
+ * Both failing throws, tagged 404 when the release says the session does not
+ * exist and 502 otherwise: nothing confirmed the close, so reporting one would
+ * leave a browser billing that the caller believes is gone.
+ */
+export async function performEnd(
+  proxy: HostedProxy,
+  client: BrowserbaseClient,
+  sessionId: string,
+): Promise<EndResult> {
+  const dashboardUrl = sessionDashboardUrl(sessionId);
+  let endError: string | undefined;
+  try {
+    // The upstream payload is dropped: a close either happened or it did not,
+    // and the payload is a CDP fragment that tells the caller nothing.
+    await proxy('end', { sessionId });
+  } catch (err: any) {
+    endError = errorText(err);
+  }
+
+  try {
+    await client.releaseSession(sessionId);
+  } catch (releaseErr: any) {
+    if (endError === undefined) {
+      return { sessionId, closed: true, closedVia: 'end', billingStopped: null, releaseError: errorText(releaseErr), dashboardUrl };
+    }
+    const err: any = new Error(
+      `Could not close session ${sessionId}. The browser-control call failed (${endError}) and so did the ` +
+        `REST release (${errorText(releaseErr)}). It may still be running and billing — check ${dashboardUrl} and close it there.`,
+    );
+    err.name = 'BrowserbaseEndFailed';
+    err.status = releaseErr?.status === 404 ? 404 : 502;
+    throw err;
+  }
+
+  return endError === undefined
+    ? { sessionId, closed: true, closedVia: 'end', billingStopped: true, dashboardUrl }
+    : { sessionId, closed: true, closedVia: 'release', billingStopped: true, endError, dashboardUrl };
 }

@@ -173,9 +173,35 @@ export function refusal(status: number, message: string): UserError {
 /** The users a DM is opened with: one 1-on-1, or 2-8 for a group DM. */
 export function resolveDmUsers(args: { userId?: string; userIds?: string[] }): string[] {
   if ((args.userId === undefined) === (args.userIds === undefined)) {
-    throw new UserError('Give userId for a 1-on-1 DM or userIds for a group DM, not both or neither.');
+    throw refusal(400, 'Give userId for a 1-on-1 DM or userIds for a group DM, not both or neither.');
   }
   return args.userIds ?? [args.userId!];
+}
+
+/**
+ * openDm's parameters, spread by both Slack servers and the REST route. Which
+ * of the two is given is checked in resolveDmUsers, not with a Zod refine.
+ */
+export const openDmFields = {
+  userId: z.string().optional().describe('The Slack user ID to open a 1-on-1 DM with (e.g., U01234ABCDE).'),
+  userIds: z.array(z.string()).min(2).max(8).optional().describe('Open a group DM with these users (2-8). Give this or userId.'),
+};
+export const openDmRestSchema = z.object(openDmFields).strict();
+
+/** Open (or retrieve) a DM. Slack answers with the existing one when it is already open. */
+export async function performOpenDm(
+  client: SlackClient,
+  args: { userId?: string; userIds?: string[] },
+): Promise<{ channelId: string; users: string[]; kind: 'im' | 'mpim' }> {
+  const users = resolveDmUsers(args);
+  const result = await client.conversationsOpen(users.join(','));
+  return { channelId: result.channel.id, users, kind: users.length > 1 ? 'mpim' : 'im' };
+}
+
+/** The tool text for an opened DM, identical on both servers. */
+export function formatOpenDm(r: { channelId: string; users: string[] }): string {
+  const kind = r.users.length > 1 ? `Group DM with ${r.users.length} people` : 'DM channel';
+  return `${kind} opened: ${r.channelId}\n\nYou can now use postMessage with channelId "${r.channelId}" to send a direct message.`;
 }
 
 export function assertWritesEnabled(): void {
@@ -511,6 +537,67 @@ function describeFile(file: SlackFileInfo): string {
 }
 
 /**
+ * files.info for a file, refused unless it is shared in `channelId`.
+ *
+ * Shared by the downloadFile tool (both servers) and the REST download route,
+ * so the share check cannot be skipped by switching surface. Refusals carry a
+ * status for the REST plane (403: missing scope, or not shared there).
+ */
+export async function resolveSharedFile(client: SlackClient, fileId: string, channelId: string): Promise<SlackFileInfo> {
+  let file: SlackFileInfo;
+  try {
+    ({ file } = await client.filesInfo(fileId));
+  } catch (err: any) {
+    if (String(err?.message || '').includes('missing_scope')) {
+      throw refusal(
+        403,
+        'Slack rejected files.info for lack of the "files:read" scope. Reconnect Slack from the dashboard to re-consent.',
+      );
+    }
+    throw err;
+  }
+
+  if (!fileShareTargets(file).has(channelId)) {
+    throw refusal(
+      403,
+      `File ${fileId} is not shared in channel ${channelId}. ` +
+      'Pass the channel or DM you read the file from.',
+    );
+  }
+  return file;
+}
+
+/**
+ * The raw bytes of a Slack-hosted file, for the REST download route.
+ *
+ * The tool's two formats exist to get a file INTO a model's context (a public
+ * re-host, or an inline image); a curl wants the bytes on disk, so this returns
+ * them whatever the type. Same share check and the same per-hop fetch
+ * (fileDownload.ts), capped at its 20 MB default.
+ */
+export async function performDownloadFileBytes(
+  client: SlackClient,
+  args: { fileId: string; channelId: string },
+): Promise<{ file: SlackFileInfo; buffer: Buffer; contentType: string }> {
+  const file = await resolveSharedFile(client, args.fileId, args.channelId);
+  if (file.mode === 'external' || file.is_external) {
+    throw refusal(422, `File ${args.fileId} is hosted outside Slack, so its bytes cannot be downloaded through the Slack API.`);
+  }
+  const downloadUrl = file.url_private_download || file.url_private;
+  if (!downloadUrl) {
+    throw refusal(404, `Slack did not return a download URL for file ${args.fileId}; it may be deleted or restricted.`);
+  }
+  let bytes: { buffer: Buffer; contentType: string };
+  try {
+    bytes = await client.downloadFileBytes(downloadUrl);
+  } catch (err: any) {
+    if (/too large|exceeds the maximum size/i.test(String(err?.message || ''))) throw refusal(422, err.message);
+    throw err;
+  }
+  return { file, buffer: bytes.buffer, contentType: file.mimetype || bytes.contentType || 'application/octet-stream' };
+}
+
+/**
  * Download one file's content.
  *
  * `channelId` is required and verified against the file's share list. On the
@@ -522,25 +609,7 @@ export async function handleDownloadFile(
   client: SlackClient,
   args: { fileId: string; channelId: string; format: 'url' | 'inline' },
 ): Promise<string | ImageContent> {
-  let file: SlackFileInfo;
-  try {
-    ({ file } = await client.filesInfo(args.fileId));
-  } catch (err: any) {
-    if (String(err?.message || '').includes('missing_scope')) {
-      throw new UserError(
-        'Slack rejected files.info for lack of the "files:read" scope. Reconnect Slack from the dashboard to re-consent.',
-      );
-    }
-    throw err;
-  }
-
-  const targets = fileShareTargets(file);
-  if (!targets.has(args.channelId)) {
-    throw new UserError(
-      `File ${args.fileId} is not shared in channel ${args.channelId}. ` +
-      'Pass the channel or DM you read the file from.',
-    );
-  }
+  const file = await resolveSharedFile(client, args.fileId, args.channelId);
 
   const meta = describeFile(file);
 

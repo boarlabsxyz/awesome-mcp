@@ -31,6 +31,8 @@ import { clickUpErrorStatus, clickUpErrorWasAnswered, parseTimestampInput } from
 import type { ClickUpClient } from './apiHelpers.js';
 import { getImagePublicBaseUrl } from '../images/imageBlobStore.js';
 import { assertOneImageSource, isImageUrlOnOurHost, storeImageFromArgs } from './docImageIngest.js';
+import { CAPTURED_EVENTS, subscribeToTaskEventsFlow } from './webhookHelpers.js';
+import type { ClickUpWebhookSubscription } from './taskEventStore.js';
 
 // === Tasks ===
 
@@ -821,4 +823,75 @@ export async function performInsertImageIntoPage(
     content_edit_mode: editMode,
   });
   return { pageId, editMode, url };
+}
+
+// === Task event subscriptions ===
+
+/**
+ * subscribeToTaskEvents' body, spread by the tool (which adds `workspaceId`)
+ * and validated on POST /api/v1/clickup/workspaces/{workspaceId}/subscription.
+ */
+export const subscribeToTaskEventsFields = {
+  events: z.array(z.enum(CAPTURED_EVENTS)).optional().describe('Event types to subscribe to. Defaults to all five in the recommended bundle.'),
+} as const;
+export const subscribeToTaskEventsRestSchema = z.object(subscribeToTaskEventsFields).strict();
+
+/** The store calls the subscribe flow needs; injected by tests, imported lazily otherwise. */
+export type SubscriptionStore = Pick<typeof import('./taskEventStore.js'), 'findSubscription' | 'createSubscription'>;
+
+export interface SubscribeResult {
+  /** `existing` when this user already had a subscription for the workspace (idempotent, nothing sent to ClickUp). */
+  kind: 'created' | 'existing';
+  /** The stored subscription WITHOUT its shared secret, which never leaves the process. */
+  subscription: Omit<ClickUpWebhookSubscription, 'sharedSecret'>;
+  callbackUrl: string;
+}
+
+/**
+ * Subscribe a user to a workspace's task events: create the ClickUp webhook and
+ * store its secret (subscribeToTaskEventsFlow), or return the existing record.
+ * Shared by the MCP tool and the REST route so both use one callback URL rule
+ * and both redact the secret.
+ *
+ * No BASE_URL is a deployment gap, not a fault: ServiceNotConfiguredError (503).
+ * A ClickUp refusal keeps its status on `.code`, read off the error the flow
+ * wraps, so a 404/403 workspace is not reported as a 500.
+ */
+export async function performSubscribeToTaskEvents(
+  client: ClickUpClient,
+  userId: number,
+  workspaceId: string,
+  args: { events?: string[] },
+  store?: SubscriptionStore,
+): Promise<SubscribeResult> {
+  const baseUrl = (process.env.BASE_URL || '').replace(/\/+$/, '');
+  if (!baseUrl) {
+    const err: any = new Error('BASE_URL env var must be set to create webhooks (ClickUp needs a callback URL).');
+    err.name = 'ServiceNotConfiguredError';
+    err.status = 503;
+    throw err;
+  }
+  const callbackUrl = `${baseUrl}/webhooks/clickup/inbound`;
+  const events = (args.events && args.events.length > 0) ? args.events : [...CAPTURED_EVENTS];
+  const s = store ?? await import('./taskEventStore.js');
+
+  let result;
+  try {
+    result = await subscribeToTaskEventsFlow(
+      {
+        createWebhook: (ws, p) => client.createWebhook(ws, p),
+        deleteWebhook: (id) => client.deleteWebhook(id),
+        findSubscription: s.findSubscription,
+        createSubscription: s.createSubscription,
+      },
+      { userId, workspaceId, events, endpoint: callbackUrl },
+    );
+  } catch (err: any) {
+    const upstream = clickUpErrorStatus(err?.cause);
+    if (typeof upstream === 'number') err.code = upstream;
+    throw err;
+  }
+  const subscription: Partial<ClickUpWebhookSubscription> = { ...result.subscription };
+  delete subscription.sharedSecret;
+  return { kind: result.kind, subscription: subscription as SubscribeResult['subscription'], callbackUrl };
 }

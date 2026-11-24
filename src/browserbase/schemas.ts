@@ -83,6 +83,7 @@ export const extractSchema = z.object({ ...extractFields, sessionId: sessionIdFi
 // so accepting one in the body would let a URL and a body disagree about which
 // browser to drive.
 export const navigateRestSchema = z.object(navigateFields);
+export const actRestSchema = z.object(actFields);
 export const observeRestSchema = z.object(observeFields);
 export const extractRestSchema = z.object(extractFields);
 

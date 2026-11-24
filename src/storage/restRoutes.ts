@@ -7,11 +7,12 @@
 //
 // The point of this plane is a script in the sandbox (or a shell) moving
 // records in bulk without passing them through Claude's context. Writes are
-// insert and update only: deleteRecords, migrateCollection and dropCollection
-// stay MCP-only, where the client can confirm them.
+// createCollection, insert and update: deleteRecords, migrateCollection and
+// dropCollection stay MCP-only, where the client can confirm them.
 import type { ZodTypeAny } from 'zod';
 
 import {
+  opCreateCollection,
   opDescribeCollection,
   opFindRecords,
   opGetRecord,
@@ -20,6 +21,7 @@ import {
   opUpdateRecord,
 } from './ops.js';
 import {
+  createCollectionSchema,
   describeCollectionSchema,
   findRecordsSchema,
   getRecordSchema,
@@ -27,6 +29,7 @@ import {
   listCollectionsSchema,
   updateRecordSchema,
 } from './schemas.js';
+import type { Fields } from './fieldSchema.js';
 
 /** The parts of an Express request a descriptor reads. */
 export interface StorageRestRequest {
@@ -88,6 +91,14 @@ export const STORAGE_REST_ROUTES: ReadonlyArray<StorageRestRoute> = [
     args: () => ({}),
     run: async (uid) => ok(await opListCollections(uid)),
     fallback: 'Failed to list storage collections',
+  },
+  {
+    // The body is the whole tool argument object: the new collection's name
+    // travels in it because no collection exists yet for a path to name.
+    path: '/api/v1/storage/collections', method: 'post', tool: 'createCollection', schema: createCollectionSchema,
+    args: (req) => bodyOf(req),
+    run: async (uid, a) => ({ status: 201, body: await opCreateCollection(uid, { ...a, fields: a.fields as Fields }) }),
+    fallback: 'Failed to create the storage collection',
   },
   {
     path: '/api/v1/storage/collections/:collection', method: 'get', tool: 'describeCollection', schema: describeCollectionSchema,
