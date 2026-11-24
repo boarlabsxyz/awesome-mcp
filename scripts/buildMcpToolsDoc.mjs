@@ -133,8 +133,8 @@ function stripComments(src) {
 function toolSourceFiles(file) {
   const files = [file];
   const src = stripComments(readFileSync(join(root, file), 'utf8'));
-  for (const m of src.matchAll(/from\s+'(\.{1,2}\/[^']+)\.js'/g)) {
-    const candidate = relative(root, resolve(dirname(join(root, file)), `${m[1]}.ts`));
+  for (const m of src.matchAll(/from\s+(['"])(\.{1,2}\/[^'"]+)\.js\1/g)) {
+    const candidate = relative(root, resolve(dirname(join(root, file)), `${m[2]}.ts`));
     if (candidate.startsWith('src/sharedTools/') || candidate.endsWith('/server.ts') || !existsSync(join(root, candidate))) continue;
     REGISTRATION_OPENER.lastIndex = 0;
     if (REGISTRATION_OPENER.test(stripComments(readFileSync(join(root, candidate), 'utf8')))) files.push(candidate);
