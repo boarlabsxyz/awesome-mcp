@@ -9,7 +9,7 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Shared (opt-in per server)](#shared-opt-in-per-server-) (2)
 - [Google Docs](#google-docs) (45)
 - [Google Sheets](#google-sheets) (14)
-- [Google Calendar](#google-calendar) (6)
+- [Google Calendar](#google-calendar) (7)
 - [Google Drive](#google-drive) (19)
 - [Gmail](#gmail) (18)
 - [Google Slides](#google-slides) (6)
@@ -113,12 +113,13 @@ Source: `src/google-sheets/server.ts` — 14 tools.
 
 ## Google Calendar
 
-Source: `src/google-calendar/server.ts` — 6 tools.
+Source: `src/google-calendar/server.ts` — 7 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `listCalendars` | Lists all calendars accessible to the user. | `GET /api/v1/calendars` |
 | `listEvents` | Lists events from a calendar within a specified date range. Each event with guests also reports YOUR OWN invitation response ("My response"), including needsAction when you have not answered — so invitations needing a reply can be found from one call instead of a getEvent per event. Answer them with updateEvent myResponseStatus. | `GET /api/v1/calendars/{calendarId}/events` |
+| `queryFreeBusy` | Returns busy intervals for one or more calendars (or people's email addresses) in a time range, for finding a free slot. Use listEvents for event details. | — |
 | `getEvent` | Gets detailed information about a specific calendar event, including every attendee's response and which attendee is you. Use updateEvent with myResponseStatus to answer the invitation. | `GET /api/v1/calendars/{calendarId}/events/{eventId}` |
 | `createEvent` | Creates a new calendar event, or a recurring series with recurrence (RRULE) and timeZone. | `POST /api/v1/calendars/{calendarId}/events` |
 | `updateEvent` | Updates an existing calendar event. Only the fields you pass are changed; everything else on the event is preserved. addAttendees/removeAttendees edit the guest list, keeping everyone else and their responses. Also ANSWERS AN INVITATION: pass myResponseStatus ("accepted", "tentative" or "declined") to set your own attendee response without touching anyone else's. Note that with the default sendUpdates "none" the organizer is not emailed about your answer — pass sendUpdates "all" if they should be. | `POST /api/v1/calendars/{calendarId}/events/{eventId}` |
@@ -131,19 +132,19 @@ Source: `src/google-drive/server.ts` — 19 tools.
 | Tool | Description | REST |
 |---|---|---|
 | `getDocumentInfo` | Gets detailed information about a specific Google Document (works with shared drives). | `GET /api/v1/drive/files/{fileId}` |
-| `createFolder` | Creates a new folder in Google Drive or a shared drive. | — |
+| `createFolder` | Creates a new folder in Google Drive or a shared drive. | `POST /api/v1/drive/folders` |
 | `listFolderContents` | Lists the contents of a specific folder in Google Drive or a shared drive. | `GET /api/v1/drive/folders/{folderId}/contents` |
 | `getFolderInfo` | Gets detailed information about a specific folder in Google Drive or a shared drive. | `GET /api/v1/drive/folders/{folderId}` |
-| `moveFile` | Moves a file or folder to a different location in Google Drive (works with shared drives). | — |
-| `copyFile` | Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead. | — |
-| `renameFile` | Renames a file or folder in Google Drive (works with shared drives). | — |
-| `deleteFile` | Permanently deletes a file or folder from Google Drive (works with shared drives). | — |
+| `moveFile` | Moves a file or folder to a different location in Google Drive (works with shared drives). Set removeFromAllParents to true to move it: by default the original stays where it is and a copy is put in the destination. | `POST /api/v1/drive/files/{fileId}/move` |
+| `copyFile` | Creates a copy of an existing Google Drive file or document (works with shared drives). For a brand-new blank document, use createDocument instead. | `POST /api/v1/drive/files/{fileId}/copy` |
+| `renameFile` | Renames a file or folder in Google Drive (works with shared drives). | `POST /api/v1/drive/files/{fileId}/rename` |
+| `deleteFile` | Deletes a file or folder from Google Drive (works with shared drives): moves it to the trash, where it can be restored, or with skipTrash deletes it permanently. | `POST /api/v1/drive/files/{fileId}/trash` |
 | `createDocument` | Creates a new Google Document (works with shared drives). | — |
-| `createFromTemplate` | Creates a new Google Document from an existing document template (works with shared drives). | — |
+| `createFromTemplate` | Creates a new Google Document from an existing document template (works with shared drives). | `POST /api/v1/drive/templates/{templateId}/documents` |
 | `listSharedDrives` | Lists shared drives (Team Drives) the user has access to. | `GET /api/v1/drive/shared-drives` |
 | `downloadDriveFile` | Download/export a Google Drive file. For Google Workspace files (Docs, Sheets, Slides), exports to a chosen format (PDF, DOCX, XLSX, PPTX, CSV) and saves the exported file to Drive. For binary files, returns the direct download link. | `GET /api/v1/drive/files/{fileId}/download` |
 | `getFilePermissions` | Retrieve all permissions on a Google Drive file or folder. Shows who has access, their roles, and sharing status. | `GET /api/v1/drive/files/{fileId}/permissions` |
-| `shareDriveFile` | Share a Google Drive file or folder by creating a permission. Required fields by type: type=user\|group → emailAddress; type=domain → domain; type=anyone → no extra field. | — |
+| `shareDriveFile` | Share a Google Drive file or folder by creating a permission. Required fields by type: type=user\|group → emailAddress; type=domain → domain; type=anyone → no extra field. | `POST /api/v1/drive/files/{fileId}/permissions` |
 | `checkPublicAccess` | List the file's direct permissions and report whether an "anyone with link" grant exists on the file itself. Does NOT follow folder-inherited, domain-wide, or shared-drive policies, so a file inside a public folder may report private here. | `GET /api/v1/drive/files/{fileId}/public` |
 | `searchDriveFiles` | Searches all of Drive (any file type, any folder) by name or content, or lists recently modified files when no query is given. Paginated. | `GET /api/v1/drive/files?q={query}` |
 | `listDriveChanges` | Follows the Drive change feed: what was created, edited, trashed or removed since a token. First call (no pageToken) returns the token to poll with. | `GET /api/v1/drive/changes` |
@@ -181,11 +182,11 @@ Source: `src/google-slides/server.ts` — 6 tools.
 
 | Tool | Description | REST |
 |---|---|---|
-| `createPresentation` | Create a new Google Slides presentation. | — |
+| `createPresentation` | Create a new Google Slides presentation. | `POST /api/v1/slides` |
 | `getPresentation` | Get presentation metadata, slide IDs, and text content from all slides. | `GET /api/v1/slides/{presentationId}` |
 | `getPage` | Get details of a specific slide including shapes, tables, and other elements. | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}` |
 | `getPageThumbnail` | Get a PNG thumbnail URL for a specific slide. | `GET /api/v1/slides/{presentationId}/pages/{pageObjectId}/thumbnail` |
-| `batchUpdatePresentation` | Apply multiple operations to a presentation (create slides, add shapes, insert text, delete objects, etc.). Pass an array of Google Slides API request objects. | — |
+| `batchUpdatePresentation` | Apply multiple operations to a presentation (create slides, add shapes, insert text, delete objects, etc.). Pass an array of Google Slides API request objects. | `POST /api/v1/slides/{presentationId}/batchUpdate` |
 | `listPresentationComments` | List comments on a Google Slides presentation (via Drive API). | `GET /api/v1/slides/{presentationId}/comments` |
 
 ## ClickUp
@@ -699,4 +700,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 514 tools across 22 sections.**
+**Grand total: 515 tools across 22 sections.**

@@ -23,15 +23,15 @@
         "summary": "Create a new presentation",
         "description": "Creates a new Google Slides presentation with the specified title.",
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["title"],
                 "properties": {
                   "title": {
                     "type": "string",
+                    "default": "Untitled Presentation",
                     "description": "The title of the new presentation"
                   }
                 }
@@ -51,7 +51,7 @@
             }
           },
           "400": {
-            "description": "Bad request - missing required fields",
+            "description": "Bad request - the body failed validation",
             "content": {
               "application/json": {
                 "schema": {
@@ -72,6 +72,16 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The JSON body is over the 5 MB limit; split the batch",
             "content": {
               "application/json": {
                 "schema": {
@@ -216,7 +226,7 @@
       "post": {
         "operationId": "batchUpdatePresentation",
         "summary": "Batch update a presentation",
-        "description": "Applies one or more updates to a presentation. Each request is validated before being applied. If any request is not valid, the entire request will fail.",
+        "description": "Applies one or more updates to a presentation. Each request is validated before being applied. If any request is not valid, the entire request will fail. The JSON body is limited to 5 MB.",
         "parameters": [
           {
             "name": "presentationId",
@@ -234,7 +244,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["requests"],
+                "required": [
+                  "requests"
+                ],
                 "properties": {
                   "requests": {
                     "type": "array",
@@ -242,7 +254,8 @@
                       "type": "object",
                       "description": "A single update request (e.g., createSlide, insertText, deleteObject, replaceAllText)"
                     },
-                    "description": "A list of updates to apply to the presentation"
+                    "description": "A list of updates to apply to the presentation",
+                    "minItems": 1
                   },
                   "requiredRevisionId": {
                     "type": "string",
@@ -261,10 +274,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "presentationId": {
-                      "type": "string",
-                      "description": "The ID of the updated presentation"
-                    },
                     "replies": {
                       "type": "array",
                       "items": {
@@ -283,7 +292,7 @@
             }
           },
           "400": {
-            "description": "Bad request - invalid update requests",
+            "description": "Bad request - an invalid or empty requests list, or a request Google refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -313,7 +322,17 @@
             }
           },
           "409": {
-            "description": "The presentation changed after requiredRevisionId was read; nothing was written.",
+            "description": "The presentation changed after requiredRevisionId was read; nothing was written. Sent when Google names the revision in its error; a stale pin Google words otherwise comes back as 400, also with nothing written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The JSON body is over the 5 MB limit; split the batch",
             "content": {
               "application/json": {
                 "schema": {

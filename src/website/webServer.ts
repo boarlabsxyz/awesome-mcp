@@ -358,6 +358,8 @@ import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWrite
 import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
 import { handleSearchEmailsRequest } from '../google-gmail/restSearch.js';
+import { DRIVE_WRITE_ROUTES, writeArgs as driveWriteArgs } from '../google-drive/restRoutes.js';
+import { SLIDES_WRITE_ROUTES, writeArgs as slidesWriteArgs } from '../google-slides/restRoutes.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
 import { STORAGE_REST_ROUTES, storageErrorResponse, storageRequestProblem } from '../storage/restRoutes.js';
 import type { GitHubClient } from '../github/apiHelpers.js';
@@ -1388,9 +1390,12 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   // global 100kb would 413 the use case. Covers /write, /append, /batchUpdate,
   // /ranges/clear and POST /api/v1/sheets (createSpreadsheet.initialData).
   '/api/v1/sheets',
-  // uploadDriveFile: the file itself, base64. A prefix mount, so it also lets
-  // /files/:id/copy take a large body; nothing else under /api/v1/drive does.
+  // uploadDriveFile: the file itself, base64. A prefix mount, so it also covers
+  // the /files/:id/* writes; none of those needs it, but none is harmed by it.
   '/api/v1/drive/files',
+  // batchUpdatePresentation: a whole deck's worth of Slides requests is the
+  // point of sending it in one batch. Also covers POST /api/v1/slides.
+  '/api/v1/slides',
   // An Outline document body is markdown of arbitrary length, and createDocument
   // / updateDocument exist on this plane precisely so a whole page can be
   // pushed in one request. Covers the collection and comment writes too.
@@ -6089,47 +6094,30 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
-  // POST /api/v1/drive/folders - Create folder
-  app.post('/api/v1/drive/folders', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { name, parentFolderId } = req.body;
-      if (!name) { res.status(400).json({ error: 'name is required' }); return; }
-      const drive = req.userSession!.googleDrive;
-      const result = await drive.files.create({
-        requestBody: {
-          name, mimeType: 'application/vnd.google-apps.folder',
-          parents: parentFolderId ? [parentFolderId] : undefined,
-        },
-        supportsAllDrives: true,
-        fields: 'id,name,parents,webViewLink',
-      });
-      res.json(result.data);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to create folder' });
-    }
-  });
+  // The Drive writes, from the table in src/google-drive/restRoutes.ts.
+  for (const route of DRIVE_WRITE_ROUTES) {
+    app.post(route.path, requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const parsed = route.schema.safeParse(driveWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const result = await route.run(req.userSession!, parsed.data);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        // A local refusal (a share missing its emailAddress) and Drive's own 400
+        // are the caller's to fix.
+        const mapped = (await import('../google-drive/filesOps.js')).driveRestErrorResponse(err);
+        if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
 
-  // POST /api/v1/drive/files/:fileId/copy - Copy a file
-  app.post('/api/v1/drive/files/:fileId/copy', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { newName, parentFolderId } = req.body;
-      const drive = req.userSession!.googleDrive;
-      const result = await drive.files.copy({
-        fileId: req.params.fileId as string,
-        requestBody: {
-          name: newName || undefined,
-          parents: parentFolderId ? [parentFolderId] : undefined,
-        },
-        supportsAllDrives: true,
-        fields: 'id,name,webViewLink',
-      });
-      res.json(result.data);
-    } catch (err: any) {
-      res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to copy file' });
-    }
-  });
-
-  // DELETE /api/v1/drive/files/:fileId - Delete file
+  // DELETE /api/v1/drive/files/:fileId - Delete file. ChatGPT Custom Actions
+  // compat, left uncatalogued: the catalog has no DELETE, and ?permanent=true
+  // skips the trash. The catalogued, signed-off way is POST .../:fileId/trash.
   app.delete('/api/v1/drive/files/:fileId', requireDriveApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
       const drive = req.userSession!.googleDrive;
@@ -6249,18 +6237,26 @@ function registerRestApiRoutes(app: express.Express): void {
 
   // === Google Slides REST API ===
 
-  // POST /api/v1/slides - Create presentation
-  app.post('/api/v1/slides', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { title } = req.body;
-      if (!title) { res.status(400).json({ error: 'title is required' }); return; }
-      const slides = req.userSession!.googleSlides;
-      const result = await slides.presentations.create({ requestBody: { title } });
-      res.json({ presentationId: result.data.presentationId, title: result.data.title });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to create presentation' });
-    }
-  });
+  // The Slides writes, from the table in src/google-slides/restRoutes.ts.
+  for (const route of SLIDES_WRITE_ROUTES) {
+    app.post(route.path, requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      let args: Record<string, unknown> = {};
+      try {
+        const parsed = route.schema.safeParse(slidesWriteArgs(route, req));
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        args = parsed.data;
+        const result = await route.run(req.userSession!.googleSlides, args);
+        res.status(result.status).json(result.body);
+      } catch (err: any) {
+        const mapped = route.errorResponse?.(err, args);
+        if (mapped) { res.status(mapped.status).json(mapped.body); return; }
+        sendUpstreamError(res, err, { notFound: route.notFound, fallback: route.fallback });
+      }
+    });
+  }
 
   // GET /api/v1/slides/:presentationId - Get presentation
   app.get('/api/v1/slides/:presentationId', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
@@ -6284,32 +6280,6 @@ function registerRestApiRoutes(app: express.Express): void {
       res.json(result.data);
     } catch (err: any) {
       res.status(err.code === 404 ? 404 : 500).json({ error: err.message || 'Failed to get page' });
-    }
-  });
-
-  // POST /api/v1/slides/:presentationId/batchUpdate - Batch update
-  app.post('/api/v1/slides/:presentationId/batchUpdate', requireSlidesApiKey, async (req: ApiAuthenticatedRequest, res) => {
-    try {
-      const { requests, requiredRevisionId } = req.body;
-      if (!requests || !Array.isArray(requests)) { res.status(400).json({ error: 'requests array is required' }); return; }
-      if (requiredRevisionId !== undefined && (typeof requiredRevisionId !== 'string' || !requiredRevisionId)) {
-        res.status(400).json({ error: 'requiredRevisionId must be a non-empty string' });
-        return;
-      }
-      const slides = req.userSession!.googleSlides;
-      const result = await slides.presentations.batchUpdate({
-        presentationId: req.params.presentationId as string,
-        requestBody: { requests, ...(requiredRevisionId ? { writeControl: { requiredRevisionId } } : {}) },
-      });
-      // revisionId is what the next pinned update should send.
-      res.json({ replies: result.data.replies, revisionId: result.data.writeControl?.requiredRevisionId ?? null });
-    } catch (err: any) {
-      // Imported lazily, like the other provider modules here, so the web
-      // process does not load the Slides handlers (and FastMCP) at startup.
-      const { slidesBatchUpdateErrorResponse } = await import('../google-slides/toolHandlers.js');
-      const mapped = slidesBatchUpdateErrorResponse(err, req.body?.requiredRevisionId);
-      if (mapped) { res.status(mapped.status).json(mapped.body); return; }
-      sendUpstreamError(res, err, { notFound: 'Presentation not found', fallback: 'Failed to batch update presentation' });
     }
   });
 

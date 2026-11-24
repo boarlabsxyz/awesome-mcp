@@ -68,6 +68,8 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
     await createMcpInstance(USER_ID, 'google-sheets', 'Test Sheets', dummyGoogleTokens, null);
     await createMcpInstance(USER_ID, 'google-calendar', 'Test Calendar', dummyGoogleTokens, null);
     await createMcpInstance(USER_ID, 'google-gmail', 'Test Gmail', dummyGoogleTokens, null);
+    await createMcpInstance(USER_ID, 'google-drive', 'Test Drive', dummyGoogleTokens, null);
+    await createMcpInstance(USER_ID, 'google-slides', 'Test Slides', dummyGoogleTokens, null);
   });
 
   const auth = () => ({ Authorization: `Bearer ${bearer}` });
@@ -393,6 +395,63 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
       const res = await request(app).post('/api/v1/gmail/messages/send').set(auth())
         .send({ to: 'bad\nline', subject: 'Hi', body: 'x'.repeat(300_000) });
       assert.equal(res.status, 400, `expected validation, not 413; got ${res.status}`);
+    });
+  });
+
+  describe('Drive', () => {
+    it('refuses a folder with no name, as the legacy route did', async () => {
+      await expectInvalid('/api/v1/drive/folders', { parentFolderId: 'p1' }, 'name');
+    });
+
+    it('refuses a copy whose newName is not a string', async () => {
+      await expectInvalid('/api/v1/drive/files/file-123/copy', { newName: 42 }, 'newName');
+    });
+
+    it('refuses a move with no destination', async () => {
+      await expectInvalid('/api/v1/drive/files/file-123/move', { removeFromAllParents: true }, 'newParentId');
+    });
+
+    it('refuses an empty rename', async () => {
+      await expectInvalid('/api/v1/drive/files/file-123/rename', { newName: '' }, 'newName');
+    });
+
+    it('refuses a permanent delete on the trash route, naming the field', async () => {
+      await expectInvalid('/api/v1/drive/files/file-123/trash', { skipTrash: true }, 'skipTrash');
+    });
+
+    it('refuses a template with no title, and replacements that are not text', async () => {
+      await expectInvalid('/api/v1/drive/templates/tpl-123/documents', {}, 'newTitle');
+      await expectInvalid('/api/v1/drive/templates/tpl-123/documents', { newTitle: 'T', replacements: { a: 1 } }, 'replacements');
+    });
+
+    it('refuses a share with an unknown role, and a user share with no address', async () => {
+      await expectInvalid('/api/v1/drive/files/file-123/permissions', { role: 'owner', type: 'anyone' }, 'role');
+      await expectInvalid('/api/v1/drive/files/file-123/permissions', { role: 'reader', type: 'user' }, 'emailAddress');
+    });
+  });
+
+  describe('Slides', () => {
+    it('refuses a title that is not a string', async () => {
+      await expectInvalid('/api/v1/slides', { title: 7 }, 'title');
+    });
+
+    it('refuses a batch whose requests are not an array of objects', async () => {
+      await expectInvalid('/api/v1/slides/presentation-123/batchUpdate', { requests: 'deleteObject' }, 'requests');
+      await expectInvalid('/api/v1/slides/presentation-123/batchUpdate', { requests: ['deleteObject'] }, 'requests');
+    });
+
+    it('refuses an empty requiredRevisionId, as the legacy route did', async () => {
+      await expectInvalid('/api/v1/slides/presentation-123/batchUpdate', { requests: [{}], requiredRevisionId: '' }, 'requiredRevisionId');
+    });
+
+    it('parses a deck-sized batch past the global 100 kb limit', async () => {
+      // Large AND invalid on purpose: requiredRevisionId must be a string, so a
+      // 400 proves /api/v1/slides is in REST_LARGE_BODY_PREFIXES.
+      const requests = [{ insertText: { objectId: 'box', text: 'x'.repeat(300_000) } }];
+      const res = await request(app).post('/api/v1/slides/presentation-123/batchUpdate').set(auth())
+        .send({ requests, requiredRevisionId: 1 });
+      assert.equal(res.status, 400, `expected validation, not 413; got ${res.status}`);
+      assert.ok(res.body.issues.fieldErrors.requiredRevisionId);
     });
   });
 });
