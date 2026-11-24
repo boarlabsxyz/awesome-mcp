@@ -15925,10 +15925,10 @@
       "get": {
         "operationId": "searchEmails",
         "summary": "Search emails",
-        "description": "Searches for emails matching the specified query using Gmail search syntax.",
+        "description": "Searches for emails matching q, in Gmail search syntax. Omit q for the most recent mail. Any query parameter other than q, query, maxResults and pageToken, a repeated parameter, q and query with different values, or a maxResults that is not a whole number from 1 to 50 answers 400 naming the accepted parameters, rather than returning unfiltered mail. A Gmail 400 (for example an invalid pageToken), 409 or 429 keeps its status.",
         "parameters": [
           {
-            "name": "query",
+            "name": "q",
             "in": "query",
             "required": false,
             "schema": {
@@ -15937,16 +15937,25 @@
             "description": "Gmail search query (e.g., 'from:user@example.com', 'subject:meeting', 'is:unread')"
           },
           {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alias of q, kept for existing callers. If both are non-empty they must be equal."
+          },
+          {
             "name": "maxResults",
             "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
-              "default": 20,
+              "default": 10,
               "minimum": 1,
-              "maximum": 500
+              "maximum": 50
             },
-            "description": "Maximum number of messages to return"
+            "description": "Maximum number of messages to return, 1 to 50"
           },
           {
             "name": "pageToken",
@@ -15976,10 +15985,6 @@
                       "type": "string",
                       "nullable": true,
                       "description": "Token for the next page of results"
-                    },
-                    "resultSizeEstimate": {
-                      "type": "integer",
-                      "description": "Estimated total number of results"
                     }
                   }
                 }
@@ -15987,7 +15992,7 @@
             }
           },
           "400": {
-            "description": "Bad request - invalid query",
+            "description": "Unsupported, repeated or conflicting query parameter; the error names the accepted ones",
             "content": {
               "application/json": {
                 "schema": {
@@ -37623,7 +37628,18 @@
           "404": {
             "description": "Resource not found"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search Google Docs (catalog: searchGoogleDocs)."
+          }
+        ]
       }
     },
     "/api/v1/docs/recent": {
@@ -37734,6 +37750,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Read a range from a spreadsheet (catalog: readSpreadsheet)."
           }
         ],
         "responses": {
@@ -38149,6 +38174,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Get a ClickUp doc with its pages (catalog: getDoc)."
           }
         ],
         "responses": {
@@ -38191,6 +38225,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "workspaceId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Get a page within a ClickUp doc (catalog: getClickUpDocPage)."
           }
         ],
         "responses": {

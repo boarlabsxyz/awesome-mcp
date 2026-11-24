@@ -357,6 +357,7 @@ import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs }
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
 import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
+import { handleSearchEmailsRequest } from '../google-gmail/restSearch.js';
 import { DRIVE_WRITE_ROUTES, writeArgs as driveWriteArgs } from '../google-drive/restRoutes.js';
 import { SLIDES_WRITE_ROUTES, writeArgs as slidesWriteArgs } from '../google-slides/restRoutes.js';
 import { REDMINE_WRITE_ROUTES, writeArgs as redmineWriteArgs } from '../redmine/restRoutes.js';
@@ -6137,30 +6138,16 @@ function registerRestApiRoutes(app: express.Express): void {
   // GET /api/v1/gmail/messages - Search emails
   app.get('/api/v1/gmail/messages', requireGmailApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
-      const gmail = req.userSession!.googleGmail;
-      const query = req.query.query as string || '';
-      const maxResults = parseInt(req.query.maxResults as string) || 10;
-      const pageToken = req.query.pageToken as string || undefined;
-      const listResult = await gmail.users.messages.list({
-        userId: 'me', q: query, maxResults, pageToken,
-      });
-      const messages = [];
-      for (const msg of listResult.data.messages || []) {
-        const detail = await gmail.users.messages.get({ userId: 'me', id: msg.id!, format: 'metadata', metadataHeaders: ['Subject', 'From', 'To', 'Date'] });
-        const headers = detail.data.payload?.headers || [];
-        messages.push({
-          id: msg.id, threadId: msg.threadId,
-          subject: headers.find(h => h.name === 'Subject')?.value,
-          from: headers.find(h => h.name === 'From')?.value,
-          to: headers.find(h => h.name === 'To')?.value,
-          date: headers.find(h => h.name === 'Date')?.value,
-          labelIds: detail.data.labelIds,
-          snippet: detail.data.snippet,
-        });
-      }
-      res.json({ messages, nextPageToken: listResult.data.nextPageToken });
+      // ?q is documented, ?query is an alias, any other parameter is a 400
+      // naming the accepted ones — see src/google-gmail/restSearch.ts.
+      const { status, body } = await handleSearchEmailsRequest(req.query as Record<string, unknown>, req.userSession!.googleGmail);
+      res.status(status).json(body);
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to search emails' });
+      // Gmail's 400 (a bad pageToken or q), 409 and 429 are the caller's to act
+      // on; 403 and 404 map as on the other routes.
+      const upstream = gmailPassthroughStatus(err);
+      if (upstream) { res.status(upstream).json({ error: err.message || 'Failed to search emails' }); return; }
+      sendUpstreamError(res, err, { fallback: 'Failed to search emails' });
     }
   });
 

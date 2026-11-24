@@ -165,7 +165,7 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'drive', method: 'GET', path: '/api/v1/drive/shared-drives', summary: 'List shared drives', mcpToolName: 'listSharedDrives', openapiOperationId: 'listSharedDrives', status: 'live' },
 
   // -------- Gmail --------
-  { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages?q={query}', summary: 'Search emails', mcpToolName: 'searchEmails', openapiOperationId: 'searchEmails', status: 'live' },
+  { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages?q={query}', summary: 'Search emails', mcpToolName: 'searchEmails', openapiOperationId: 'searchEmails', status: 'live', notes: 'query is accepted as an alias of q. Also takes maxResults (1-50, default 10) and pageToken. Any other query parameter, a repeated one, q and query with different values, or a maxResults outside 1-50 answers 400 naming the accepted ones rather than returning unfiltered mail.' },
   { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages/{messageId}', summary: 'Read an email (JSON or markdown via Accept)', mcpToolName: 'readEmail', openapiOperationId: 'readEmail', status: 'live' },
   { service: 'gmail', method: 'GET', path: '/api/v1/gmail/messages/{messageId}/attachments/{attachmentId}', summary: 'Download an email attachment', mcpToolName: 'getAttachment', openapiOperationId: 'getAttachment', status: 'live', notes: 'Returns Gmail base64url-encoded payload as JSON {size, data}; caller decodes.' },
   { service: 'gmail', method: 'GET', path: '/api/v1/gmail/filters', summary: 'List Gmail filters', mcpToolName: 'listFilters', openapiOperationId: 'listGmailFilters', status: 'live', notes: 'Needs gmail.settings.basic: a connection made before it was added gets 403 naming Reconnect.' },

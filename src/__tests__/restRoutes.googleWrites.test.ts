@@ -367,6 +367,30 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
       await expectInvalid('/api/v1/gmail/messages/batch-trash', { messageIds }, 'messageIds');
     });
 
+    // A search parameter the route does not read used to answer 200 with
+    // recent, unfiltered mail. The dummy tokens make any Gmail call a 500, so
+    // a 400 here also proves the search never reached Gmail.
+    it('refuses an unsupported search parameter, naming the accepted ones', async () => {
+      const res = await request(app).get('/api/v1/gmail/messages?search=from%3Aaliexpress').set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /Unsupported query parameter\(s\): search\./);
+      assert.match(res.body.error, /\bq\b.*\bquery\b.*maxResults.*pageToken/);
+    });
+
+    it('refuses a repeated q rather than searching for nothing', async () => {
+      const res = await request(app).get('/api/v1/gmail/messages?q=from%3Aa&q=from%3Ab').set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /\bq\b/);
+    });
+
+    it('refuses a maxResults outside 1-50 instead of coercing or forwarding it', async () => {
+      for (const bad of ['0', 'abc', '1000']) {
+        const res = await request(app).get(`/api/v1/gmail/messages?q=x&maxResults=${bad}`).set(auth());
+        assert.equal(res.status, 400, `maxResults=${bad}: ${JSON.stringify(res.body)}`);
+        assert.match(res.body.error, /maxResults must be a whole number from 1 to 50/);
+      }
+    });
+
     it('accepts a message body past the global 100 kb limit', async () => {
       const res = await request(app).post('/api/v1/gmail/messages/send').set(auth())
         .send({ to: 'bad\nline', subject: 'Hi', body: 'x'.repeat(300_000) });
