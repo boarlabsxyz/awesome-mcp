@@ -31,11 +31,34 @@ export type SupabaseRestOutcome =
   | { status: number; text: string; body?: undefined };
 
 /**
- * Tools whose result is content other people wrote, whatever its wrapping:
- * anyone with project access can write a notebook cell, and the MCP tool's
- * description already tells the model to treat them as untrusted.
+ * Tools whose result carries free text that other people wrote or can
+ * influence, whether or not upstream wraps it in its boundary:
+ *
+ *   - get_notebook / list_notebooks: cells, names and descriptions anyone with
+ *     project access can write.
+ *   - get_logs / query_logs: request paths, headers and messages any client of
+ *     the project's public APIs can put there.
+ *   - get_edge_function: function source.
+ *   - list_migrations: migration names and SQL written by project members.
+ *   - get_advisors: findings that quote schema objects and SQL.
+ *   - list_tables: table and column comments, constraint names.
+ *   - generate_typescript_types: generated from the schema, so it carries
+ *     enum labels and identifiers project members chose.
+ *
+ * Left out on purpose: tools that return resource metadata (ids, names,
+ * status, regions, keys, bucket and branch lists, storage config) or text
+ * Supabase itself authors (search_docs, get_cost). A write's answer echoes
+ * the caller's own input.
  */
-const UNTRUSTED_RESULT_TOOLS = new Set(['get_notebook']);
+const UNTRUSTED_RESULT_TOOLS = new Set([
+  'get_notebook', 'list_notebooks',
+  'get_logs', 'query_logs',
+  'get_edge_function',
+  'list_migrations',
+  'get_advisors',
+  'list_tables',
+  'generate_typescript_types',
+]);
 
 /** Upstream's boundary tag around data it did not author (execute_sql and kin). */
 const UNTRUSTED_MARKER = '<untrusted-data-';
@@ -99,16 +122,20 @@ function supabaseCallErrorResponse(err: any, message: string): { status: number;
     // Supabase ran the tool and refused it (unknown project, a missing or
     // stale confirm_cost_id, a bad notebook cell). Well-formed request,
     // upstream said no — distinct from this plane's own 400 with `issues`.
+    // EVERY tool_error lands here, including a Supabase-side failure the
+    // caller did not cause: `isError` carries no status to tell them apart.
     return { status: 422, body: { error: message } };
   }
   // transport
   if (err.status === 403) return { status: 403, body: { error: message } };
   if (err.status === 429) return { status: 429, body: { error: message } };
-  // 401 is NEVER echoed here: on the REST plane a 401 means the caller's own
-  // bearer is bad. Supabase rejecting the STORED credential is a 502 whose
-  // message says to reconnect. Everything else (a protocol 400, a 5xx, a
-  // timeout) is the upstream failing, not the caller.
-  return { status: 502, body: { error: message, ...(typeof err.status === 'number' ? { upstreamStatus: err.status } : {}) } };
+  // 401 is NEVER echoed here, not even as `upstreamStatus` in the body: on the
+  // REST plane a 401 means the caller's own bearer is bad, and a client
+  // reading "401" would blame it. Supabase rejecting the STORED credential is
+  // a 502 whose message says to reconnect. Everything else (a protocol 400, a
+  // 5xx, a timeout) is the upstream failing, not the caller.
+  const echo = typeof err.status === 'number' && err.status !== 401;
+  return { status: 502, body: { error: message, ...(echo ? { upstreamStatus: err.status } : {}) } };
 }
 
 /** The log slice runSupabaseToolUncapped takes. Refresh failures go to stderr. */

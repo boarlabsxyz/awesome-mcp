@@ -50,12 +50,36 @@ describe('supabaseRestBody', () => {
   });
 
   it('cuts at the MCP cap, reports how much there was, and keeps the untrusted flag', () => {
+    // A metadata tool, so the flag can only come from the boundary marker.
     const text = `<untrusted-data-a>${'y'.repeat(MAX_RESULT_CHARS)}`;
-    const body = supabaseRestBody('get_logs', text);
+    const body = supabaseRestBody('list_projects', text);
     assert.equal(body.truncated, true);
     assert.equal(body.totalChars, text.length);
     assert.equal((body.result as string).length, MAX_RESULT_CHARS);
     assert.equal(body.untrustedData, true);
+  });
+});
+
+describe('untrustedData', () => {
+  // Free text other people wrote or can influence, which upstream does not
+  // wrap in its boundary: flagged by tool, whatever the text looks like.
+  const OUTSIDER_TEXT = [
+    'get_notebook', 'list_notebooks', 'get_logs', 'query_logs', 'get_edge_function',
+    'list_migrations', 'get_advisors', 'list_tables', 'generate_typescript_types',
+  ];
+
+  it('is true for every tool returning outsider-written text, even as plain JSON', () => {
+    for (const tool of OUTSIDER_TEXT) {
+      assert.ok(SUPABASE_REST_ROUTES.some(r => r.tool === tool), `${tool} has no route`);
+      assert.equal(supabaseRestBody(tool, '{"rows":[]}').untrustedData, true, tool);
+    }
+  });
+
+  it('is false for every other routed tool unless the boundary marker is present', () => {
+    for (const route of SUPABASE_REST_ROUTES.filter(r => !OUTSIDER_TEXT.includes(r.tool))) {
+      assert.equal(supabaseRestBody(route.tool, '{"id":"x"}').untrustedData, false, route.tool);
+      assert.equal(supabaseRestBody(route.tool, '<untrusted-data-1>x</untrusted-data-1>').untrustedData, true, route.tool);
+    }
   });
 });
 
@@ -75,7 +99,9 @@ describe('supabaseRestError', () => {
     assert.deepEqual(map(new SupabaseCallError('input_required', 'ask')), { status: 409, body: { error: 'ask', performed: false } });
     assert.equal(map(new SupabaseCallError('transport', 'forbidden', 403)).status, 403);
     assert.equal(map(new SupabaseCallError('transport', 'slow down', 429)).status, 429);
-    assert.deepEqual(map(new SupabaseCallError('transport', 'bad token', 401)), { status: 502, body: { error: 'bad token', upstreamStatus: 401 } });
+    // A 401 is never echoed, not even in the body: it would read as the caller's bearer.
+    assert.deepEqual(map(new SupabaseCallError('transport', 'bad token', 401)), { status: 502, body: { error: 'bad token' } });
+    assert.deepEqual(map(new SupabaseCallError('transport', 'down', 503)), { status: 502, body: { error: 'down', upstreamStatus: 503 } });
     assert.deepEqual(map(new SupabaseCallError('transport', 'timed out')), { status: 502, body: { error: 'timed out' } });
   });
 
