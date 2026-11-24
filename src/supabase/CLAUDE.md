@@ -43,7 +43,15 @@
 
 - **Results are capped at 200k characters.** SQL results arrive inside an `<untrusted-data-…>` boundary, and the cap note says the cut text is still untrusted.
 - **Hidden behind `SUPABASE_ENABLED`** (strict `=== 'true'`; a restart, not a deploy), like Browserbase and Pinecone.
-- **The read tools have `planned` REST entries only — no routes yet.** Wiring them is a separate `/add-rest-endpoint supabase` pass.
+
+### REST plane (`restRoutes.ts` table, `restOps.ts` handler; NOT exercised live)
+
+- **Each route runs the MCP tool itself.** The handler finds the tool in `SUPABASE_TOOLS`, validates with its `parameters`, and calls `runSupabaseToolUncapped` — the tool body minus the cap — so `argsForSettings` sees the same name, group and annotations. Never restate a group, annotation or schema in the route table; `restOps.test.ts` checks the table against the tools and the catalog.
+- **Settings are enforced exactly as on the tools, re-read per request, failing closed.** A refusal is 403 with `setting` (`readOnly` / `projectRef` / `features`); an unreadable store is 503 (`SupabaseSettingDenied` / `SupabaseSettingsUnavailable`, matched by name). Pinned with real connections by `src/__tests__/restRoutes.supabase.test.ts`.
+- **JSON answers are an envelope `{ tool, truncated, untrustedData, result }`** — upstream answers text, and SQL-shaped results sit inside an `<untrusted-data-…>` boundary that does not parse. `result` is parsed JSON when the text is JSON, the text otherwise. `?format=text` is exactly the MCP output.
+- **Same 200k cap as the tools** (`MAX_RESULT_CHARS`), reported as `truncated: true` + `totalChars` + `note`, with `result` the cut text. `untrustedData` is true on the upstream boundary marker, and always for `get_notebook`.
+- **Upstream outcomes by `SupabaseCallError.kind`:** `tool_error` → 422, `input_required` → 409 with `performed: false`, transport 403 → 403, 429 → 429, everything else → 502. **An upstream 401 is a 502** (the stored credential, not the caller's bearer).
+- **Exposed writes are the non-destructive ones, on owner request** (catalog notes). `create_project`/`create_branch` cost money and `pause_project` takes the database offline, reachable with the permanent dashboard API key. `confirm_cost` is a POST although it stores nothing — its answer is assent to a charge. Every `destructiveHint` tool stays MCP-only (`MCP_ONLY` in `mcpToolsRestCoverage.test.ts`).
 
 ## Source Files
 
@@ -51,7 +59,9 @@
 |------|----------|
 | `src/supabase/server.ts` | Tool definitions — each a `supabaseTool({...})` proxy registration mirroring the upstream hosted server |
 | `src/supabase/schemas.ts` | Zod parameter schemas for the proxied tools |
-| `src/supabase/hostedProxy.ts` | The hosted-MCP target (`protocol: 'modern'`), the 401/403 wording, the `input_required` refusal and the result cap |
+| `src/supabase/hostedProxy.ts` | The hosted-MCP target (`protocol: 'modern'`), the 401/403 wording, the `input_required` refusal, `SupabaseCallError` and the result cap |
+| `src/supabase/restRoutes.ts` | REST route table: path/query/body → tool arguments, one row per endpoint |
+| `src/supabase/restOps.ts` | REST handler: tool lookup, validation, the envelope, failure → status |
 | `src/supabase/apiHelpers.ts` | Call-time OAuth refresh (single-flight) |
 | `src/supabase/oauthCallback.ts` | Code exchange + refresh grant; `SUPABASE_AUTHORIZE_URL` / `SUPABASE_TOKEN_URL` |
 | `src/supabase/connectToken.ts` | PAT validation, organization summary, instance naming |

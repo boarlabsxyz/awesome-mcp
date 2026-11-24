@@ -33,9 +33,13 @@ const EXPECTED_TOOLS = [
   'list_notebooks', 'get_notebook', 'create_notebook', 'run_notebook',
 ];
 
+const SHARED_TOOLS = ['mintRestBearerForCurl', 'listRestEndpoints'];
+
 describe('supabase server registration', () => {
   it('registers exactly the mirrored upstream tools, under their upstream names', () => {
-    assert.deepEqual([...toolMap.keys()].sort(), [...EXPECTED_TOOLS].sort());
+    // Plus the two REST-plane tools every server with live REST entries carries
+    // (sharedToolsRegistration.test.ts); they are not proxied, so not in SUPABASE_TOOLS.
+    assert.deepEqual([...toolMap.keys()].sort(), [...EXPECTED_TOOLS, ...SHARED_TOOLS].sort());
     assert.deepEqual(SUPABASE_TOOLS.map(t => t.name).sort(), [...EXPECTED_TOOLS].sort());
   });
 
