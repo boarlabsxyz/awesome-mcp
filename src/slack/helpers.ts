@@ -517,6 +517,11 @@ export async function handleSearchFiles(
 const INLINE_MAX_BYTES = 1.5 * 1024 * 1024;
 const TEXT_MAX_BYTES = 256 * 1024;
 
+/** The file's own type is HTML, so a text/html download is the file, not a sign-in page. */
+function isHtmlFile(file: SlackFileInfo): boolean {
+  return (file.mimetype || '').toLowerCase().startsWith('text/html');
+}
+
 /** Text-ish files are returned as-is rather than hosted. */
 function isTextLike(file: SlackFileInfo): boolean {
   const mime = (file.mimetype || '').toLowerCase();
@@ -589,7 +594,7 @@ export async function performDownloadFileBytes(
   }
   let bytes: { buffer: Buffer; contentType: string };
   try {
-    bytes = await client.downloadFileBytes(downloadUrl);
+    bytes = await client.downloadFileBytes(downloadUrl, { allowHtml: isHtmlFile(file) });
   } catch (err: any) {
     if (/too large|exceeds the maximum size/i.test(String(err?.message || ''))) throw refusal(422, err.message);
     throw err;
@@ -686,7 +691,7 @@ export async function handleDownloadFile(
   }
 
   if (isTextLike(file)) {
-    const { buffer } = await client.downloadFileBytes(downloadUrl, { maxBytes: TEXT_MAX_BYTES });
+    const { buffer } = await client.downloadFileBytes(downloadUrl, { maxBytes: TEXT_MAX_BYTES, allowHtml: isHtmlFile(file) });
     return `${meta}\n\n\`\`\`\n${buffer.toString('utf8')}\n\`\`\``;
   }
 

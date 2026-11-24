@@ -760,6 +760,27 @@ describe('handleDownloadFile', () => {
     assert.ok((result as string).includes('log.txt'));
   });
 
+  it('returns an HTML file as text, letting only that file through the sign-in check', async () => {
+    const opts: any[] = [];
+    const client = {
+      filesInfo: async () => ({ file: { ...IMAGE, name: 'page.html', mimetype: 'text/html' } }),
+      downloadFileBytes: async (_url: string, o: any) => { opts.push(o); return { buffer: Buffer.from('<h1>Hi</h1>'), contentType: 'text/html' }; },
+    } as any;
+    const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
+    assert.ok((result as string).includes('<h1>Hi</h1>'));
+    assert.equal(opts[0].allowHtml, true);
+
+    // A plain-text file keeps the check (allowHtml false) and the same output.
+    const plainOpts: any[] = [];
+    const plain = {
+      filesInfo: async () => ({ file: { ...IMAGE, name: 'log.txt', mimetype: 'text/plain' } }),
+      downloadFileBytes: async (_url: string, o: any) => { plainOpts.push(o); return { buffer: Buffer.from('x'), contentType: 'text/plain' }; },
+    } as any;
+    const text = await handleDownloadFile(plain, { fileId: 'F1', channelId: 'C1', format: 'url' });
+    assert.equal(plainOpts[0].allowHtml, false);
+    assert.ok((text as string).endsWith('```\nx\n```'));
+  });
+
   it('returns metadata rather than throwing for an unsupported type', async () => {
     const client = fileClient({ ...IMAGE, name: 'report.pdf', mimetype: 'application/pdf' });
     const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
@@ -1159,6 +1180,15 @@ describe('performDownloadFileBytes (REST download)', () => {
       performDownloadFileBytes(client(file, async () => { throw new Error('boom'); }), { fileId: 'F1', channelId: 'C1' }),
       (err: any) => err.message === 'boom' && err.status === undefined,
     );
+  });
+
+  it('allows an HTML response only for a file whose own type is HTML', async () => {
+    const seen: any[] = [];
+    const record = async (_url: string, opts: any) => { seen.push(opts); return { buffer: Buffer.from('<p>x</p>'), contentType: 'text/html' }; };
+    const c = (f: any) => ({ filesInfo: async () => ({ file: f }), downloadFileBytes: record }) as any;
+    await performDownloadFileBytes(c({ ...file, name: 'page.html', mimetype: 'text/html' }), { fileId: 'F1', channelId: 'C1' });
+    await performDownloadFileBytes(c(file), { fileId: 'F1', channelId: 'C1' });
+    assert.deepEqual(seen.map(o => o?.allowHtml), [true, false]);
   });
 
   it('refuses an unshared file with 403 and rethrows a files.info failure untouched', async () => {

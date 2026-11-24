@@ -40560,7 +40560,7 @@
       "post": {
         "operationId": "endBrowserSession",
         "summary": "Close a browser session cleanly so it stops billing",
-        "description": "Close a browser session cleanly so it stops billing. Mirrors the MCP tool `end`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Hosted end, then a REST release; when the hosted call fails the release alone closes it (closedVia release). billingStopped is true once a release was accepted and null when only the hosted end succeeded. Both failing is a 502.",
+        "description": "Close a browser session cleanly so it stops billing. Mirrors the MCP tool `end`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Always ends in a force release, like /release: the hosted end runs first and the REST release is then always sent, alone when the hosted call fails (closedVia release), so anything in progress in that browser is lost. billingStopped is true once a release was accepted and null when only the hosted end succeeded. Both failing is a 502.",
         "tags": [
           "browserbase"
         ],

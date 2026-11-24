@@ -45,8 +45,14 @@ let calls: Recorded[] = [];
 /** Slack method → JSON reply. Unlisted methods answer ok:false. */
 let replies: Record<string, unknown> = {};
 
+/** What a files.slack.com download answers: the bytes and their content type. */
+let fileReply: { body: string; type: string } = { body: '', type: 'application/octet-stream' };
+
 function stubFetch(): void {
   globalThis.fetch = (async (input: any, init: any = {}) => {
+    if (String(input).startsWith('https://files.slack.com/')) {
+      return new Response(fileReply.body, { status: 200, headers: { 'content-type': fileReply.type } });
+    }
     const method = String(input).replace('https://slack.com/api/', '');
     calls.push({ method, params: new URLSearchParams(String(init.body ?? '')) });
     const json = replies[method] ?? { ok: false, error: `unstubbed_${method}` };
@@ -346,6 +352,34 @@ describe('REST data plane: Slack handler bodies', () => {
       replies['files.info'] = { ok: true, file: { id: 'F1', channels: ['C1'] } };
       const gone = await request(app).get('/api/v1/slack/files/F1/download?channelId=C1').set(auth());
       assert.equal(gone.status, 404);
+    });
+
+    it('streams the bytes with an RFC 6266 disposition for non-Latin and emoji names', async () => {
+      for (const name of ['звіт.pdf', 'plan 📈.csv']) {
+        replies['files.info'] = { ok: true, file: { ...shared, name, mimetype: 'application/pdf' } };
+        fileReply = { body: '%PDF-1.7', type: 'application/pdf' };
+        const res = await request(app).get('/api/v1/slack/files/F1/download?channelId=C1').set(auth())
+          .buffer(true).parse((r, cb) => { const chunks: Buffer[] = []; r.on('data', (c: Buffer) => chunks.push(c)); r.on('end', () => cb(null, Buffer.concat(chunks))); });
+        assert.equal(res.status, 200, `${name}: ${res.status}`);
+        assert.equal((res.body as Buffer).toString(), '%PDF-1.7');
+        assert.match(res.headers['content-type'], /application\/pdf/);
+        assert.ok(res.headers['content-disposition'].includes(`filename*=UTF-8''${encodeURIComponent(name)}`));
+        assert.match(res.headers['content-disposition'], /^attachment; filename="[\x20-\x7e]+"/);
+      }
+    });
+
+    it('downloads a real .html file, and answers 403 when Slack sends a sign-in page instead', async () => {
+      replies['files.info'] = { ok: true, file: { ...shared, name: 'page.html', mimetype: 'text/html' } };
+      fileReply = { body: '<h1>Report</h1>', type: 'text/html; charset=utf-8' };
+      const html = await request(app).get('/api/v1/slack/files/F1/download?channelId=C1').set(auth());
+      assert.equal(html.status, 200);
+      assert.equal(html.text, '<h1>Report</h1>');
+
+      replies['files.info'] = { ok: true, file: shared };
+      fileReply = { body: '<html>Sign in</html>', type: 'text/html' };
+      const signIn = await request(app).get('/api/v1/slack/files/F1/download?channelId=C1').set(auth());
+      assert.equal(signIn.status, 403);
+      assert.match(signIn.body.error, /files:read/);
     });
 
     it('answers 403 naming the scope when files.info lacks files:read', async () => {

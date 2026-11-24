@@ -136,6 +136,22 @@ describe('fetchSlackFileBytes', () => {
     );
   });
 
+  it('tags the sign-in refusal 403, so the REST route does not answer 500', async () => {
+    mockFetchQueue([{ status: 200, headers: { 'content-type': 'text/html' }, bytes: PNG }]);
+    await assert.rejects(
+      () => fetchSlackFileBytes('https://files.slack.com/files-pri/T1-F1/shot.png', TOKEN),
+      (err: any) => err.status === 403 && err.name === 'UserError',
+    );
+  });
+
+  it('returns an HTML response when the file itself is HTML (allowHtml)', async () => {
+    const page = new TextEncoder().encode('<h1>Report</h1>');
+    mockFetchQueue([{ status: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, bytes: page }]);
+    const result = await fetchSlackFileBytes('https://files.slack.com/files-pri/T1-F1/report.html', TOKEN, { allowHtml: true });
+    assert.equal(result.buffer.toString(), '<h1>Report</h1>');
+    assert.match(result.contentType, /text\/html/);
+  });
+
   it('rejects a redirect to a private address', async () => {
     mockFetchQueue([
       { status: 302, headers: { location: 'http://127.0.0.1/admin' } },

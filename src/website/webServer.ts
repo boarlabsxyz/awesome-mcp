@@ -7975,13 +7975,16 @@ function registerRestApiRoutes(app: express.Express): void {
       const client = await slackBotClient(req, res);
       if (!client) return;
       const { performDownloadFileBytes } = await import('../slack/helpers.js');
+      const { contentDisposition } = await import('../clickup/attachments.js');
       const { file, buffer, contentType } = await performDownloadFileBytes(client, {
         fileId: req.params.fileId as string,
         channelId,
       });
-      const name = (file.name || file.title || file.id || 'download').replace(/["\\\r\n]/g, '_');
       res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+      // ASCII fallback plus filename* (RFC 6266): setHeader throws on any
+      // character above U+00FF, so a raw `звіт.pdf` or emoji name would 500
+      // after the whole download.
+      res.setHeader('Content-Disposition', contentDisposition(file.name || file.title || file.id || 'download'));
       res.setHeader('Content-Length', String(buffer.length));
       res.send(buffer);
     } catch (err: any) {
