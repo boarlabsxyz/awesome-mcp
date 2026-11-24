@@ -10,6 +10,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { restUsageMiddleware } from '../usage/restUsageMiddleware.js';
 import { registerAdminUsageRoutes } from '../usage/adminUsageRoutes.js';
 import { ADMIN_ONLY_MCPS, isAdminEmail } from '../auth/admin.js';
+import { COMPENSATION_RESTRICTED_MESSAGE, mayViewCompensation } from '../auth/compensationAccess.js';
 import { listUsersWithConnections } from '../usage/adminUsers.js';
 import { connectAdminMcp } from '../admin-mcp/connect.js';
 import { connectStorageMcp } from '../storage/connect.js';
@@ -8167,14 +8168,6 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to list leave balances',
     },
     {
-      // 403 here usually means the key may not view compensation, not a bad key.
-      path: '/api/v1/peopleforce/employees/:employeeId/salaries',
-      fetch: (c, id) => c.listEmployeeSalaries(id),
-      format: (h, r) => h.formatSalaries(r.data ?? []),
-      notFound: 'Employee not found',
-      fallback: 'Failed to list salaries',
-    },
-    {
       path: '/api/v1/peopleforce/employees/:employeeId/skills',
       fetch: (c, id) => c.listEmployeeSkills(id),
       format: (h, r) => h.formatEmployeeSkills(r.data ?? []),
@@ -8219,6 +8212,34 @@ function registerRestApiRoutes(app: express.Express): void {
       }
     });
   }
+
+  // GET /api/v1/peopleforce/employees/:employeeId/salaries - compensation, operator-gated.
+  // The caller must be in PEOPLEFORCE_COMPENSATION_EMAILS or ADMIN_EMAILS
+  // (src/auth/compensationAccess.ts) BEFORE any upstream call is made.
+  app.get('/api/v1/peopleforce/employees/:employeeId/salaries', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    if (!mayViewCompensation(req.user?.email)) {
+      res.status(403).json({ error: COMPENSATION_RESTRICTED_MESSAGE, code: 'compensation_restricted' });
+      return;
+    }
+    try {
+      const helpers = await import('../peopleforce/apiHelpers.js');
+      const token = peopleForceToken(req, res);
+      if (!token) return;
+      const client = new helpers.PeopleForceClient(token, req.userSession!.peopleForceBaseUrl);
+      const result = await client.listEmployeeSalaries(req.params.employeeId as string);
+      respondNegotiated(req, res, result, () => helpers.formatSalaries(result.data ?? []));
+    } catch (err: any) {
+      console.error('Error listing PeopleForce employee salaries:', err);
+      if (err?.status === 403) {
+        res.status(403).json({
+          error: 'This PeopleForce API key may not view compensation data (403). An admin can allow it in PeopleForce Settings → API keys → the key restrictions (People → Compensation).',
+          code: 'compensation_forbidden_by_key',
+        });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Employee not found', fallback: 'Failed to list salaries' });
+    }
+  });
 
   // GET /api/v1/peopleforce/employees/:employeeId/holidays?page= - Holidays that apply to one employee
   app.get('/api/v1/peopleforce/employees/:employeeId/holidays', requirePeopleForceApiKey, async (req: ApiAuthenticatedRequest, res) => {

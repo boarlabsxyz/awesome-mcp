@@ -23,6 +23,7 @@ import { instrumentServer } from '../usage/instrumentServer.js';
 import { z } from 'zod';
 
 import { UserSession } from '../userSession.js';
+import { requireCompensationAccessFor } from '../auth/compensationAccess.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { isoDate } from '../util/isoDate.js';
 import {
@@ -62,11 +63,14 @@ import {
   COMPLIANCE_DOCUMENT_STATUS_VALUES,
 } from './apiHelpers.js';
 
-export const peopleForceV4Server = instrumentServer(new FastMCP<UserSession>({
+/** Tools that return person compensation; see src/auth/compensationAccess.ts. */
+export const PEOPLEFORCE_V4_COMPENSATION_TOOLS: ReadonlySet<string> = new Set(['listPersonSalaries', 'getPersonSalary']);
+
+export const peopleForceV4Server = requireCompensationAccessFor(instrumentServer(new FastMCP<UserSession>({
   name: 'PeopleForce v4 MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'peopleforce-v4'),
-}), 'peopleforce-v4');
+}), 'peopleforce-v4'), PEOPLEFORCE_V4_COMPENSATION_TOOLS);
 
 // ---------------------------------------------------------------------------
 // Shared argument shapes

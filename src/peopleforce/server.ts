@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { isoDate } from '../util/isoDate.js';
+import { requireCompensationAccessFor } from '../auth/compensationAccess.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import {
@@ -61,11 +62,14 @@ import {
   EMPLOYEE_STATUS_VALUES,
 } from './apiHelpers.js';
 
-export const peopleForceServer = instrumentServer(new FastMCP<UserSession>({
+/** Tools that return employee compensation; see src/auth/compensationAccess.ts. */
+export const PEOPLEFORCE_COMPENSATION_TOOLS: ReadonlySet<string> = new Set(['listEmployeeSalaries']);
+
+export const peopleForceServer = requireCompensationAccessFor(instrumentServer(new FastMCP<UserSession>({
   name: 'PeopleForce MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'peopleforce'),
-}), 'peopleforce');
+}), 'peopleforce'), PEOPLEFORCE_COMPENSATION_TOOLS);
 
 // PeopleForce publishes 45 live REST endpoints (src/restCatalog.ts), and
 // public/openapi-peopleforce.json documents their auth as "a 5-minute bearer
