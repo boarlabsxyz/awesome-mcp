@@ -17,6 +17,288 @@
     }
   ],
   "paths": {
+    "/api/v1/sheets/{spreadsheetId}/cells/update-by-field": {
+      "post": {
+        "operationId": "updateCellByFieldName",
+        "summary": "Find a row by a column value and write one field of it, named by header",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Row 1 holds the headers. Finds the first row whose searchColumn equals searchValue and writes newValue into the column headed fieldName, returning the old value. No matching row is a 404 and an unknown header a 400 with availableHeaders; neither writes anything. updatedCells 1 confirms the write.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "searchColumn": {
+                    "type": "string",
+                    "description": "Column letter to search in (e.g., \"A\")."
+                  },
+                  "searchValue": {
+                    "type": "string",
+                    "description": "The value to search for (exact match) to locate the row."
+                  },
+                  "fieldName": {
+                    "type": "string",
+                    "description": "The header name of the column to update."
+                  },
+                  "newValue": {
+                    "type": "string",
+                    "description": "The new value to write into the cell."
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "Sheet/tab name. Defaults to the first sheet."
+                  }
+                },
+                "required": [
+                  "searchColumn",
+                  "searchValue",
+                  "fieldName",
+                  "newValue"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cell updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "updated": {
+                      "type": "object",
+                      "properties": {
+                        "row": {
+                          "type": "integer"
+                        },
+                        "column": {
+                          "type": "string"
+                        },
+                        "cell": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "rowContext": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "oldValue": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "newValue": {
+                      "type": "string"
+                    },
+                    "updatedCells": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or fieldName is not a header (availableHeaders lists them)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found, or no row has searchValue in searchColumn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/sheets": {
+      "post": {
+        "operationId": "addSpreadsheetSheet",
+        "summary": "Add a tab to a spreadsheet, optionally sized",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Adds a sheet/tab. Google sizes a new tab at 1000 rows x 26 columns and a write does not grow the grid, so pass rowCount/columnCount when the data is bigger. Answers 201 with the sheet properties Google reports (sheetId, title, gridProperties). A tab name already in use is a 400.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sheetTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title for the new sheet/tab."
+                  },
+                  "rowCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Rows in the new tab (Google default: 1000). Set this to at least the number of rows you are about to write."
+                  },
+                  "columnCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Columns in the new tab (Google default: 26, i.e. A-Z)."
+                  }
+                },
+                "required": [
+                  "sheetTitle"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tab added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "sheetId": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "gridProperties": {
+                      "type": "object",
+                      "properties": {
+                        "rowCount": {
+                          "type": "integer"
+                        },
+                        "columnCount": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or Google refused the tab (e.g. a duplicate name)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Google answered with no sheet properties",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sheets": {
       "get": {
         "operationId": "listSpreadsheets",
