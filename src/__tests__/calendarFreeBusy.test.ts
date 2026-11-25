@@ -120,6 +120,31 @@ describe('queryFreeBusy', () => {
     assert.doesNotMatch(ghostSection, /Free/);
   });
 
+  it('lists no busy blocks for a calendar with errors', async () => {
+    const calendar = mkCalendar(async () => ({
+      data: {
+        calendars: {
+          'ghost@example.com': {
+            busy: [{ start: '2026-03-02T09:00:00Z', end: '2026-03-02T10:00:00Z' }],
+            errors: [{ domain: 'global', reason: 'backendError' }],
+          },
+        },
+      },
+    }));
+    const out: string = await run({ calendarIds: ['ghost@example.com'] }, calendar);
+    assert.match(out, /Unknown: Google could not read this calendar \(backendError\)/);
+    assert.doesNotMatch(out, /2026-03-02T09:00:00Z – /);
+    assert.doesNotMatch(out, /Free for/);
+  });
+
+  it('forwards timestamps with an explicit offset or fractional seconds unchanged', async () => {
+    const calendar = mkCalendar(async () => ({ data: { calendars: {} } }));
+    await run({ timeMin: '2026-03-02T09:00:00+02:00', timeMax: '2026-03-02T18:00:00.500Z' }, calendar);
+    const body = calendar.freebusy.query.mock.calls[0].arguments[0].requestBody;
+    assert.equal(body.timeMin, '2026-03-02T09:00:00+02:00');
+    assert.equal(body.timeMax, '2026-03-02T18:00:00.500Z');
+  });
+
   it('reports a calendar missing from the response as unknown, never free', async () => {
     const calendar = mkCalendar(async () => ({ data: { calendars: {} } }));
     const out: string = await run({ calendarIds: ['someone@example.com'] }, calendar);
@@ -142,6 +167,11 @@ describe('queryFreeBusy', () => {
       ['timeMax before timeMin', { timeMin: '2026-03-02T00:00:00Z', timeMax: '2026-03-01T00:00:00Z' }],
       ['unparseable timeMin', { timeMin: 'next tuesday' }],
       ['unparseable timeMax', { timeMax: 'soon' }],
+      ['empty timeMin', { timeMin: '' }],
+      ['empty timeMax', { timeMax: '' }],
+      ['date-only timeMin and timeMax', { timeMin: '2026-03-02', timeMax: '2026-03-03' }],
+      ['a timeMin with no offset', { timeMin: '2026-03-02T10:00:00' }],
+      ['an impossible date', { timeMin: '2026-13-02T00:00:00Z' }],
     ];
     for (const [label, args] of cases) {
       it(`refuses ${label}`, async () => {

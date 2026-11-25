@@ -160,17 +160,21 @@ calendarServer.addTool({
 // Google's freebusy.query accepts at most 50 calendars per request.
 const FREEBUSY_MAX_CALENDARS = 50;
 
+// Google wants RFC 3339 with an offset; Date.parse also accepts date-only and
+// offset-less forms, which Google rejects or would read in some other zone.
+const RFC3339_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i;
+
 calendarServer.addTool({
   name: 'queryFreeBusy',
   annotations: { readOnlyHint: true },
-  description: 'Returns busy intervals for one or more calendars (or people\'s email addresses) in a time range, for finding a free slot. Use listEvents for event details.',
+  description: 'Returns busy intervals for calendars or people\'s email addresses in a time range, for finding a free slot.',
   parameters: z.object({
     calendarIds: z.array(z.string()).optional().default(['primary'])
       .describe('Calendar IDs or email addresses to check (max 50). Use "primary" for the user\'s primary calendar.'),
     timeMin: z.string().optional()
-      .describe('Start of the time range (ISO 8601 format, e.g., "2024-01-01T00:00:00Z"). Defaults to now.'),
+      .describe('Start of the time range (RFC 3339 with an offset, e.g., "2024-01-01T00:00:00Z"). Defaults to now.'),
     timeMax: z.string().optional()
-      .describe('End of the time range (ISO 8601 format). Defaults to 7 days after timeMin.'),
+      .describe('End of the time range (RFC 3339 with an offset). Defaults to 7 days after timeMin.'),
     timeZone: z.string().optional()
       .describe('IANA time zone for the response (e.g., "Europe/Berlin"). Passed through to Google.'),
   }),
@@ -183,15 +187,15 @@ calendarServer.addTool({
       throw new UserError(`Too many calendars (${calendarIds.length}): Google accepts at most ${FREEBUSY_MAX_CALENDARS} per query.`);
     }
 
-    const timeMin = args.timeMin || new Date().toISOString();
+    const timeMin = args.timeMin ?? new Date().toISOString();
     const minMs = Date.parse(timeMin);
-    if (Number.isNaN(minMs)) {
-      throw new UserError(`timeMin is not a valid ISO 8601 date-time: ${timeMin}`);
+    if (!RFC3339_DATE_TIME.test(timeMin) || Number.isNaN(minMs)) {
+      throw new UserError(`timeMin is not an RFC 3339 date-time with an offset (e.g. "2026-03-02T00:00:00Z"): ${timeMin}`);
     }
-    const timeMax = args.timeMax || new Date(minMs + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const timeMax = args.timeMax ?? new Date(minMs + 7 * 24 * 60 * 60 * 1000).toISOString();
     const maxMs = Date.parse(timeMax);
-    if (Number.isNaN(maxMs)) {
-      throw new UserError(`timeMax is not a valid ISO 8601 date-time: ${timeMax}`);
+    if (!RFC3339_DATE_TIME.test(timeMax) || Number.isNaN(maxMs)) {
+      throw new UserError(`timeMax is not an RFC 3339 date-time with an offset (e.g. "2026-03-02T00:00:00Z"): ${timeMax}`);
     }
     if (maxMs <= minMs) {
       throw new UserError(`timeMax (${timeMax}) must be after timeMin (${timeMin}).`);
@@ -216,7 +220,8 @@ calendarServer.addTool({
       result += '\n\n';
 
       // Request order, not response order. A calendar Google could not read —
-      // or did not return at all — is unknown, never free.
+      // or did not return at all — is unknown, never free, and lists no busy
+      // blocks: they may be partial, and the gaps between them would read as free.
       for (const id of calendarIds) {
         result += `**${id}**\n`;
         const entry = calendars[id];
@@ -228,9 +233,10 @@ calendarServer.addTool({
           result += `   Unknown: Google could not read this calendar (${reasons})\n`;
         } else if (busy.length === 0) {
           result += '   Free for the whole range\n';
-        }
-        for (const b of busy) {
-          result += `   ${b.start} – ${b.end}\n`;
+        } else {
+          for (const b of busy) {
+            result += `   ${b.start} – ${b.end}\n`;
+          }
         }
         result += '\n';
       }

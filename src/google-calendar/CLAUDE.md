@@ -27,7 +27,8 @@
 - **Refused before writing:** an RSVP while removing yourself, and the same address in add and remove.
 
 ### Free/busy (NOT exercised live)
-- **`queryFreeBusy` reports a calendar Google returned `errors` for — or omitted — as Unknown, never free** — an unreadable calendar is not an available one.
+- **`queryFreeBusy` reports a calendar Google returned `errors` for — or omitted — as Unknown, never free** — an unreadable calendar is not an available one. Such a calendar also lists no busy blocks: they may be partial, and the gaps would read as free.
+- **`queryFreeBusy` refuses a `timeMin`/`timeMax` that is not RFC 3339 with an offset** (empty, date-only, no offset) in `execute` — `Date.parse` accepts those forms, Google does not.
 - **More than 50 ids is refused locally** — Google's per-query calendar limit. Empty ids and `timeMax <= timeMin` are refused too.
 - **`groups` (group expansion) is not supported** — no `groupIds` parameter.
 
