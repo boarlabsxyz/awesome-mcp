@@ -1545,13 +1545,15 @@ export function formatSalaries(
     else groups.set(key, [s]);
   }
   // Only dated records say anything about when a rate applied, so neither the
-  // previous rate nor the next scheduled one is ever an undated record.
+  // previous rate nor the next scheduled one is ever an undated record. The
+  // previous rate is the newest one dated strictly before the current one: a
+  // record sharing the current date lost the id tie-break, it never applied.
   const lines: Array<{ group: Array<PeopleForceSalary & { current: boolean }>; render: (label: string) => string }> = [];
   for (const group of groups.values()) {
     const idx = group.findIndex((s) => s.current);
     if (idx >= 0) {
       const cur = group[idx];
-      const prev = group.slice(idx + 1).find((s) => s.effective_on);
+      const prev = group.slice(idx + 1).find((s) => s.effective_on && s.effective_on < cur.effective_on!);
       const before = prev ? ` (previously ${salaryAmount(prev)}, from ${prev.effective_on})` : '';
       lines.push({ group, render: (label) => `Current${label}: ${salaryAmount(cur)}, effective ${cur.effective_on}${before}` });
     } else {

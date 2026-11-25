@@ -101,6 +101,18 @@ describe('salaries', () => {
     assert.doesNotMatch(out, /previously/);
   });
 
+  test('previously cites only a rate dated before the current one, never a same-date record', () => {
+    const out = formatSalaries([hourly(5, '2026-01-01', '1.00'), hourly(9, '2026-01-01', '2.00'), hourly(3, '2025-06-01', '0.50')], TODAY);
+    assert.ok(out.includes('Current: 2.00 USD per hour, effective 2026-01-01 (previously 0.50 USD per hour, from 2025-06-01)'));
+    assert.doesNotMatch(out, /previously [^)]*from 2026-01-01/);
+  });
+
+  test('a same-date record alone gives no previously clause', () => {
+    const out = formatSalaries([hourly(5, '2026-01-01', '1.00'), hourly(9, '2026-01-01', '2.00')], TODAY);
+    assert.ok(out.includes('Current: 2.00 USD per hour, effective 2026-01-01'));
+    assert.doesNotMatch(out, /previously/);
+  });
+
   test('equal dates are broken by id, higher id first and current', () => {
     const out = markCurrentSalaries([hourly(5, '2026-01-01', '1.00'), hourly(9, '2026-01-01', '2.00')], TODAY);
     assert.deepEqual(out.map((s) => [s.id, s.current]), [[9, true], [5, false]]);
@@ -228,7 +240,7 @@ describe('salaries', () => {
       assert.deepEqual(markCurrentSalaries(input, TODAY).map((s) => s.id), [9, 7, 5]);
     }
     const out = formatSalaries([hourly(5, '2026-01-01', '1.00'), hourly(9, '2026-01-01', '2.00')], TODAY);
-    assert.ok(out.includes('Current: 2.00 USD per hour, effective 2026-01-01 (previously 1.00 USD per hour, from 2026-01-01)'));
+    assert.match(out, /^## 1\. 2\.00 USD per hour \(current\)$/m);
   });
 
   test('previously is the next-older dated record in the same group, past any scheduled or other-component one', () => {
