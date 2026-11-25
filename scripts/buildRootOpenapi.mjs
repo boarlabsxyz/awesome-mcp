@@ -39,6 +39,7 @@ const SERVICE_PREFIX = {
   'openapi-outline.json': 'Outline',
   'openapi-github.json': 'GitHub',
   'openapi-pinecone.json': 'Pinecone',
+  'openapi-supabase.json': 'Supabase',
   'openapi-storage.json': 'Storage',
 };
 

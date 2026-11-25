@@ -40,6 +40,8 @@ import { instrumentServer } from '../usage/instrumentServer.js';
 
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
+import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
+import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 
 import { runSupabaseTool } from './apiHelpers.js';
 import {
@@ -58,6 +60,11 @@ export const supabaseServer = instrumentServer(new FastMCP<UserSession>({
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'supabase'),
 }), 'supabase');
+
+// The REST plane (/api/v1/supabase/*): a 5-minute bearer for curl, and the
+// endpoint list. Not proxied tools, so not in SUPABASE_TOOLS.
+registerMintRestBearerForCurl(supabaseServer);
+registerListRestEndpoints(supabaseServer);
 
 /** Every registered tool, in registration order — for tests and the REST plane. */
 export const SUPABASE_TOOLS: SupabaseToolDef[] = [];

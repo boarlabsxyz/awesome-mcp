@@ -355,6 +355,7 @@ import { validateGitHubToken, buildGitHubInstanceName, fetchGitHubUser, uniqueGi
 import { exchangeGitHubOauthCode, GITHUB_TOKEN_URL } from '../github/oauthCallback.js';
 import { GITHUB_READ_ROUTES, GITHUB_WRITE_ROUTES, writeArgs as githubWriteArgs } from '../github/restRoutes.js';
 import { PINECONE_READ_ROUTES, PINECONE_WRITE_ROUTES, writeArgs as pineconeWriteArgs } from '../pinecone/restRoutes.js';
+import { SUPABASE_REST_ROUTES } from '../supabase/restRoutes.js';
 import { HUBSPOT_WRITE_ROUTES, hubspotPassthroughStatus, writeArgs as hubspotWriteArgs } from '../hubspot/restRoutes.js';
 import { GMAIL_WRITE_ROUTES, gmailPassthroughStatus, writeArgs as gmailWriteArgs } from '../google-gmail/restRoutes.js';
 import { handleSearchEmailsRequest } from '../google-gmail/restSearch.js';
@@ -4709,6 +4710,13 @@ function registerRestApiRoutes(app: express.Express): void {
           } else if (connection.provider === 'pinecone') {
             const { createPineconeSession } = await import('../userSession.js');
             req.userSession = createPineconeSession(user, connection);
+          } else if (connection.provider === 'supabase') {
+            // Same reason as GitHub: without it the connection falls through
+            // to the Google path, auth passes, and every handler finds no
+            // supabaseAccessToken. It also carries the OAuth refresh plumbing
+            // and the instance id the per-call settings re-read keys on.
+            const { createSupabaseSession } = await import('../userSession.js');
+            req.userSession = createSupabaseSession(user, connection);
           } else {
             const mcp = await getMcpCatalog(connection.mcpSlug);
             const { client_id, client_secret } = mcp?.googleClientId && mcp?.googleClientSecret
@@ -4745,6 +4753,7 @@ function registerRestApiRoutes(app: express.Express): void {
   const requireBrowserbaseApiKey = createServiceAuth('browserbase', 'browserbase');
   const requireGitHubApiKey = createServiceAuth('github', 'github');
   const requirePineconeApiKey = createServiceAuth('pinecone', 'pinecone');
+  const requireSupabaseApiKey = createServiceAuth('supabase', 'supabase');
   const requireOutlineApiKey = createServiceAuth('outline', 'outline');
   const requireStorageApiKey = createServiceAuth('storage', 'storage');
 
@@ -11529,6 +11538,31 @@ function registerRestApiRoutes(app: express.Express): void {
       } catch (err) {
         console.error(`Error in Pinecone ${route.tool}:`, err);
         sendPineconeError(res, err, route.fallback);
+      }
+    });
+  }
+
+  // === Supabase ===
+  //
+  // Reads plus the non-destructive writes, from one table
+  // (src/supabase/restRoutes.ts) and one handler (src/supabase/restOps.ts).
+  // The handler runs the MCP tool's own body minus the cap, so the
+  // connection's settings — project limit, read-only, feature groups — are
+  // enforced by the same argsForSettings call, re-read per request and failing
+  // closed. That matters most here because this plane accepts the PERMANENT
+  // dashboard API key, and two of these writes (create_project, create_branch)
+  // cost money and one (pause_project) takes a database offline.
+  for (const route of SUPABASE_REST_ROUTES) {
+    app[route.method](route.path, requireSupabaseApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const { handleSupabaseRest } = await import('../supabase/restOps.js');
+        const out = await handleSupabaseRest(route, req, req.userSession, negotiateFormat(req));
+        if (out.text !== undefined) res.status(out.status).type('text/plain; charset=utf-8').send(out.text);
+        else res.status(out.status).json(out.body);
+      } catch (err) {
+        // handleSupabaseRest never throws; this is a failed module load.
+        console.error(`Error in Supabase ${route.tool}:`, err);
+        res.status(500).json({ error: route.fallback });
       }
     });
   }
