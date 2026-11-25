@@ -209,6 +209,39 @@ describe('subscribeToTaskEventsFlow', () => {
     assert.equal(calls.deleteWebhook[0], 'wh-new');
   });
 
+  it('returns the concurrent winner as existing when the insert loses a unique-violation race', async () => {
+    // Two first subscribes for the same user and workspace both pass the
+    // find; the second insert hits UNIQUE(user_id, workspace_id).
+    const winner = fakeSubscription({ clickupWebhookId: 'wh-winner' });
+    let finds = 0;
+    const { deps, calls } = fakeDeps({
+      findSubscription: async () => (++finds === 1 ? null : winner),
+      createSubscription: async () => { throw Object.assign(new Error('duplicate key value'), { code: '23505' }); },
+    });
+    const result = await subscribeToTaskEventsFlow(deps, { userId: 100, workspaceId: 'W1', events: ['taskStatusUpdated'], endpoint: 'https://x/cb' });
+    assert.equal(result.kind, 'existing');
+    assert.equal(result.subscription.clickupWebhookId, 'wh-winner');
+    assert.deepEqual(calls.deleteWebhook, ['wh-new'], 'the losing webhook is deleted');
+  });
+
+  it('keeps a lost race an error when its webhook could not be deleted, or no winner is found', async () => {
+    const dup = () => { throw Object.assign(new Error('duplicate key value'), { code: '23505' }); };
+    const orphan = fakeDeps({
+      findSubscription: async () => null,
+      createSubscription: async () => dup(),
+      deleteWebhook: async () => { throw new Error('clickup down'); },
+    });
+    await assert.rejects(
+      subscribeToTaskEventsFlow(orphan.deps, { userId: 100, workspaceId: 'W1', events: ['taskStatusUpdated'], endpoint: 'https://x/cb' }),
+      /cleanup FAILED/,
+    );
+    const noWinner = fakeDeps({ findSubscription: async () => null, createSubscription: async () => dup() });
+    await assert.rejects(
+      subscribeToTaskEventsFlow(noWinner.deps, { userId: 100, workspaceId: 'W1', events: ['taskStatusUpdated'], endpoint: 'https://x/cb' }),
+      /rolled back.*duplicate key/,
+    );
+  });
+
   it('notes cleanup failure when both persist AND rollback fail', async () => {
     const cleanupCalls: string[] = [];
     const { deps } = fakeDeps({

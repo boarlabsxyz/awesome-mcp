@@ -316,44 +316,6 @@ describe('REST data plane: Browserbase handlers', () => {
     assert.equal(acted.status, 200);
   });
 
-  it('ends a session: hosted end, then a release, billingStopped true', async () => {
-    const calls = mockUpstreams({ toolText: 'closed', rest: { id: 'sess-1', status: 'REQUEST_RELEASE' } });
-    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
-    assert.equal(res.status, 200);
-    assert.equal(res.body.closedVia, 'end');
-    assert.equal(res.body.billingStopped, true);
-    assert.ok(calls.some(c => c.body?.params?.name === 'end'));
-    assert.ok(calls.some(c => c.url.includes('/sessions/sess-1') && c.body?.status === 'REQUEST_RELEASE'));
-  });
-
-  it('end falls back to the release when the hosted call fails', async () => {
-    mockUpstreams({ toolIsError: true, toolText: 'transport closed', rest: { id: 'sess-1', status: 'REQUEST_RELEASE' } });
-    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
-    assert.equal(res.status, 200);
-    assert.equal(res.body.closedVia, 'release');
-    assert.equal(res.body.billingStopped, true);
-    assert.ok(res.body.endError);
-  });
-
-  it('end reports billingStopped null when only the hosted call succeeded', async () => {
-    mockUpstreams({ toolText: 'closed', rest: { error: 'nope' }, restStatus: 500 });
-    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
-    assert.equal(res.status, 200);
-    assert.equal(res.body.billingStopped, null);
-    assert.ok(res.body.releaseError);
-  });
-
-  it('end answers 502 when neither path closed it, and 404 for an unknown session', async () => {
-    mockUpstreams({ toolIsError: true, toolText: 'transport closed', rest: { error: 'down' }, restStatus: 500 });
-    const failed = await post('/api/v1/browserbase/sessions/sess-1/end');
-    assert.equal(failed.status, 502);
-    assert.match(failed.body.error, /may still be running and billing/);
-
-    mockUpstreams({ toolIsError: true, toolText: 'transport closed', rest: { error: 'missing' }, restStatus: 404 });
-    const missing = await post('/api/v1/browserbase/sessions/sess-1/end');
-    assert.equal(missing.status, 404);
-  });
-
   it('403s for an account with no Browserbase connection', async () => {
     await createOrUpdateUser(
       { email: 'bb-none@example.com', googleId: 'google-bb-none', name: 'BB None' },

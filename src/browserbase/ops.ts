@@ -45,7 +45,6 @@ import {
   startSchema,
 } from './schemas.js';
 import type { BrowserbaseSettings } from './settings.js';
-import { performEnd } from './restOps.js';
 
 /** Injected so tests need not stub global fetch. */
 export type HostedProxy = (
@@ -209,6 +208,71 @@ export async function opStart(
   if (ruleNote) parts.push(ruleNote);
 
   return `${parts.join('\n\n')}${sessionReminder(sessionId)}`;
+}
+
+export interface EndResult {
+  sessionId: string;
+  closed: true;
+  /** `end` when the hosted call closed it; `release` when that failed and the REST release did. */
+  closedVia: 'end' | 'release';
+  /**
+   * true once Browserbase accepted a release. null when only the hosted end
+   * succeeded: a keep-alive session can survive it, so whether it still bills
+   * is unknown rather than false.
+   */
+  billingStopped: true | null;
+  /** Why the hosted end failed, when closedVia is release. */
+  endError?: string;
+  /** Why the follow-up release was refused, when billingStopped is null. */
+  releaseError?: string;
+  dashboardUrl: string;
+}
+
+const errorText = (err: any): string => safeErrorText(err?.message ?? String(err));
+
+/**
+ * Close a session by id: the hosted `end`, then always a REST release, because a
+ * keep-alive session may survive the hosted call. When the hosted call fails the
+ * release is the fallback. opEnd renders the result. MCP-only: the owner
+ * declined a REST route for it, since it always ends in a force release.
+ *
+ * Both failing throws, tagged 404 when the release says the session does not
+ * exist and 502 otherwise: nothing confirmed the close, so reporting one would
+ * leave a browser billing that the caller believes is gone.
+ */
+export async function performEnd(
+  proxy: HostedProxy,
+  client: BrowserbaseClient,
+  sessionId: string,
+): Promise<EndResult> {
+  const dashboardUrl = sessionDashboardUrl(sessionId);
+  let endError: string | undefined;
+  try {
+    // The upstream payload is dropped: a close either happened or it did not,
+    // and the payload is a CDP fragment that tells the caller nothing.
+    await proxy('end', { sessionId });
+  } catch (err: any) {
+    endError = errorText(err);
+  }
+
+  try {
+    await client.releaseSession(sessionId);
+  } catch (releaseErr: any) {
+    if (endError === undefined) {
+      return { sessionId, closed: true, closedVia: 'end', billingStopped: null, releaseError: errorText(releaseErr), dashboardUrl };
+    }
+    const err: any = new Error(
+      `Could not close session ${sessionId}. The browser-control call failed (${endError}) and so did the ` +
+        `REST release (${errorText(releaseErr)}). It may still be running and billing — check ${dashboardUrl} and close it there.`,
+    );
+    err.name = 'BrowserbaseEndFailed';
+    err.status = releaseErr?.status === 404 ? 404 : 502;
+    throw err;
+  }
+
+  return endError === undefined
+    ? { sessionId, closed: true, closedVia: 'end', billingStopped: true, dashboardUrl }
+    : { sessionId, closed: true, closedVia: 'release', billingStopped: true, endError, dashboardUrl };
 }
 
 /**

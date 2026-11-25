@@ -20,8 +20,9 @@
 - **Hidden behind `BROWSERBASE_ENABLED`** — seeded with `isActive` from the flag (default `false`), strict `=== 'true'` (verified), restart not deploy. While hidden, existing connections keep working (`mcp:browserbase` stays in `scopeMap.ts`) but the dashboard row degrades: raw slug, fallback icon, `getMcpUrl` returns `''`.
 
 ### REST plane
-- **`act` and `end` are on REST at the owner's request for full coverage of non-destructive writes** — so the permanent dashboard API key can submit forms on third-party sites with no confirmation step; accepted knowingly. `act` applies no domain rules, exactly as the MCP tool (rules bind `navigate` only); a route test pins that a restricted connection still acts.
-- **`end` runs `performEnd` (`restOps.ts`), which `opEnd` now renders** — hosted end, then always a release; `closedVia` and three-valued `billingStopped` (`null` = only the hosted end succeeded). Both failing is 502 (404 when the release says the session is gone). The route table answers a tagged 502 itself, since `sendUpstreamError` would say 500.
+- **`act` is on REST at the owner's request for full coverage of non-destructive writes** — so the permanent dashboard API key can submit forms on third-party sites with no confirmation step; accepted knowingly. `act` applies no domain rules, exactly as the MCP tool (rules bind `navigate` only); a route test pins that a restricted connection still acts.
+- **`end` has no REST route, by the owner's decision** — it always ends in a force release, like `/release`, so in-progress browser work is lost (`MCP_ONLY` lists it as destructive). Its op `performEnd` lives in `ops.ts` and `opEnd` renders it: hosted end, then always a release, with `closedVia` and three-valued `billingStopped`.
+- **The route table answers a tagged 502 itself** (a `start` with no readable id), since `sendUpstreamError` would say 500.
 
 ### Response safety (`responseSafety.ts`) — verified live
 - **Never forward upstream output verbatim.** `navigate` returns a ~15 KB CDP object with the connect websocket URL, `signingKey` JWTs and internal `*.svc.cluster.local` hosts, so it is **allowlisted** to `url` (echoed from the request), `status`, `title` — not redacted. Redaction is the backstop for `extract`/`observe`.

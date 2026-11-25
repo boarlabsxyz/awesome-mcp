@@ -390,6 +390,16 @@ export async function subscribeToTaskEventsFlow(
       );
       cleanupNote = `cleanup FAILED — orphaned ClickUp webhook ${creds.webhookId} must be deleted manually`;
     }
+    // 23505 (unique violation on user_id, workspace_id): a concurrent first
+    // subscribe for the same user and workspace stored its row between our
+    // findSubscription and this insert. Once our own webhook is gone, the
+    // winner is the subscription the caller asked for, so return it as the
+    // idempotent result. If our webhook could NOT be deleted, it is still live
+    // with no stored secret, so that stays an error naming the orphan.
+    if (persistErr?.code === '23505' && cleanupNote === 'rolled back') {
+      const winner = await deps.findSubscription(input.userId, input.workspaceId);
+      if (winner) return { kind: 'existing', subscription: winner };
+    }
     const msg = persistErr?.message || String(persistErr);
     throw new Error(`Failed to persist ClickUp subscription (webhook ${cleanupNote}): ${msg}`);
   }

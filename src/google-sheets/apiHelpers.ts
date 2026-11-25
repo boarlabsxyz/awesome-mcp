@@ -84,6 +84,17 @@ export function normalizeRange(range: string, sheetName?: string): string {
 }
 
 /**
+ * The `'Sheet name'!` prefix of an A1 range, or '' when no sheet is named.
+ *
+ * Always quoted, with an apostrophe doubled: Google requires quoting for a
+ * title with spaces or punctuation ("Q3 Plan", "Bob's"), and a quoted plain
+ * title is still valid, so one rule serves every range built from a name.
+ */
+export function sheetRangePrefix(sheetName?: string): string {
+  return sheetName ? `'${sheetName.replace(/'/g, "''")}'!` : '';
+}
+
+/**
  * Reads values from a spreadsheet range
  */
 export async function readRange(
@@ -584,9 +595,7 @@ export async function findRowByValue(
   searchValue: string,
   sheetName?: string
 ): Promise<number | null> {
-  const range = sheetName
-    ? `${sheetName}!${searchColumn}:${searchColumn}`
-    : `${searchColumn}:${searchColumn}`;
+  const range = `${sheetRangePrefix(sheetName)}${searchColumn}:${searchColumn}`;
 
   const data = await readRange(sheets, spreadsheetId, range);
   const rows = data.values || [];
@@ -607,7 +616,7 @@ export async function getHeaders(
   spreadsheetId: string,
   sheetName?: string
 ): Promise<string[]> {
-  const range = sheetName ? `${sheetName}!1:1` : '1:1';
+  const range = `${sheetRangePrefix(sheetName)}1:1`;
   const data = await readRange(sheets, spreadsheetId, range);
   return (data.values?.[0] || []).map(String);
 }
@@ -621,7 +630,7 @@ export async function getRowValues(
   rowNumber: number,
   sheetName?: string
 ): Promise<any[]> {
-  const range = sheetName ? `${sheetName}!${rowNumber}:${rowNumber}` : `${rowNumber}:${rowNumber}`;
+  const range = `${sheetRangePrefix(sheetName)}${rowNumber}:${rowNumber}`;
   const data = await readRange(sheets, spreadsheetId, range);
   return data.values?.[0] || [];
 }

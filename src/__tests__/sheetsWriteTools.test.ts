@@ -550,7 +550,7 @@ describe('updateCellByFieldName', () => {
     return mkSheets({
       values: {
         get: mock.fn(async ({ range }: any) => {
-          if (/!?A:A$/.test(range)) return { data: { values: rows.map(r => [r[0]]) } };
+          if (/(^|!)[A-Z]+:[A-Z]+$/i.test(range)) return { data: { values: rows.map(r => [r[0]]) } };
           if (/1:1$/.test(range)) return { data: { values: [rows[0]] } };
           const n = Number(String(range).split('!').pop()!.split(':')[0]);
           return { data: { values: [rows[n - 1]] } };
@@ -575,8 +575,37 @@ describe('updateCellByFieldName', () => {
   it('prefixes the sheet name, and reports updatedCells null when Google says nothing', async () => {
     const update = mock.fn(async () => ({ data: {} }));
     const r: any = await performUpdateCellByFieldName(grid(update), { ...args, sheetName: 'Data' });
-    assert.equal((update.mock.calls[0] as any).arguments[0].range, 'Data!C3');
+    assert.equal((update.mock.calls[0] as any).arguments[0].range, "'Data'!C3");
     assert.equal(r.updatedCells, null);
+  });
+
+  it('refuses a searchColumn that is a cell reference, before any read or write', async () => {
+    const sheets = grid();
+    await assert.rejects(
+      performUpdateCellByFieldName(sheets, { ...args, searchColumn: 'A2' }),
+      (err: any) => err instanceof UserError && /column letters/.test(err.message) && (err as any).code === undefined,
+    );
+    assert.equal(sheets.spreadsheets.values.get.mock.calls.length, 0);
+    assert.equal(sheets.spreadsheets.values.update.mock.calls.length, 0);
+  });
+
+  it('accepts single and multi-letter columns', async () => {
+    for (const searchColumn of ['A', 'aa', 'AA']) {
+      const sheets = grid();
+      const r: any = await performUpdateCellByFieldName(sheets, { ...args, searchColumn });
+      assert.equal(r.success, true, searchColumn);
+      assert.equal(sheets.spreadsheets.values.get.mock.calls[0].arguments[0].range, `${searchColumn}:${searchColumn}`);
+    }
+  });
+
+  it('quotes the sheet name in every range it builds: lookup, headers, row and write', async () => {
+    for (const [sheetName, quoted] of [['Q3 Plan', "'Q3 Plan'"], ["Bob's Sheet", "'Bob''s Sheet'"]]) {
+      const sheets = grid();
+      await performUpdateCellByFieldName(sheets, { ...args, sheetName });
+      const reads = sheets.spreadsheets.values.get.mock.calls.map((c: any) => c.arguments[0].range).sort();
+      assert.deepEqual(reads, [`${quoted}!1:1`, `${quoted}!3:3`, `${quoted}!A:A`].sort());
+      assert.equal(sheets.spreadsheets.values.update.mock.calls[0].arguments[0].range, `${quoted}!C3`);
+    }
   });
 
   it('returns a reason, writing nothing, for a missing value or header', async () => {

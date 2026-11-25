@@ -5502,6 +5502,20 @@ function registerRestApiRoutes(app: express.Express): void {
   // ahead of the param routes anyway.
   app.get('/api/v1/calendars/freebusy', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
+      // Refused before defaulting: a repeated time parameter arrives as an
+      // array, which qstr would drop to "now"/"+7 days", and calendarIds=,
+      // would fall back to primary. Either way the caller would get
+      // availability for a window or calendar they did not ask about.
+      const repeated = ['timeMin', 'timeMax', 'timeZone']
+        .filter((k) => req.query[k] !== undefined && typeof req.query[k] !== 'string');
+      if (repeated.length) {
+        res.status(400).json({ error: `Query parameter(s) ${repeated.join(', ')} must be given exactly once.` });
+        return;
+      }
+      if (req.query.calendarIds !== undefined && !qarr(req.query.calendarIds)) {
+        res.status(400).json({ error: 'calendarIds is empty. Omit it for the primary calendar, or give comma-separated calendar ids.' });
+        return;
+      }
       const { queryFreeBusySchema, performQueryFreeBusy } = await import('../google-calendar/server.js');
       const parsed = queryFreeBusySchema.safeParse({
         calendarIds: qarr(req.query.calendarIds),
@@ -6030,7 +6044,9 @@ function registerRestApiRoutes(app: express.Express): void {
       res.json(result);
     } catch (err: any) {
       console.error('Error updating cell by field name:', err);
-      if (err?.code === 400) {
+      // A refusal the op made (searchColumn not column letters) carries no
+      // upstream status; Google's own 400 does. Both are the caller's to fix.
+      if ((err?.name === 'UserError' && typeof err?.code !== 'number') || err?.code === 400) {
         res.status(400).json({ error: err.message });
         return;
       }
@@ -9905,15 +9921,6 @@ function registerRestApiRoutes(app: express.Express): void {
       fallback: 'Failed to release browser session',
       run: ({ ops, client }, _a, p) => ops.performReleaseSession(client, p.sessionId),
     },
-    {
-      // The clean shutdown: hosted end, then a release (release alone is the
-      // force-close above). billingStopped is three-valued, see performEnd.
-      path: '/api/v1/browserbase/sessions/:sessionId/end',
-      method: 'post',
-      notFound: 'Session not found',
-      fallback: 'Failed to end browser session',
-      run: ({ ops, client, proxy }, _a, p) => ops.performEnd(proxy, client, p.sessionId),
-    },
   ];
 
   for (const route of BROWSERBASE_ROUTES) {
@@ -9972,9 +9979,9 @@ function registerRestApiRoutes(app: express.Express): void {
           res.status(400).json({ error: err.message });
           return;
         }
-        // A start with no readable id, or an end that neither path confirmed:
-        // the request was fine and Browserbase did not deliver, so 502 rather
-        // than the 500 sendUpstreamError would collapse it to.
+        // A start with no readable id: the request was fine and Browserbase
+        // did not deliver, so 502 rather than the 500 sendUpstreamError would
+        // collapse it to.
         if (err?.status === 502) {
           res.status(502).json({ error: err.message });
           return;

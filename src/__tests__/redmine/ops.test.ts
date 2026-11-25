@@ -645,7 +645,7 @@ describe('version ops', () => {
 
     const d = stubClient();
     // Issues are not deleted with the version — saying so prevents a wrong assumption.
-    assert.match(await ops.opDeleteVersion(d.client, { versionId: 1 } as any, log), /no target version/);
+    assert.equal(await ops.opDeleteVersion(d.client, { versionId: 1 } as any, log), 'Deleted version #1.');
   });
 });
 

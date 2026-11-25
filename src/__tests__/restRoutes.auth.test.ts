@@ -475,7 +475,6 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/browserbase/sessions/sess-123/observe',
   '/api/v1/browserbase/sessions/sess-123/extract',
   '/api/v1/browserbase/sessions/sess-123/release',
-  '/api/v1/browserbase/sessions/sess-123/end',
   // REST coverage pass: the non-destructive writes, and the HubSpot searches
   // (reads served over POST: their filters are objects).
   '/api/v1/sheets/sheet-123/sheets',

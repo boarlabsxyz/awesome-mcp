@@ -418,6 +418,26 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
       assert.match(res.body.error, /must be after timeMin/);
     });
 
+    it('refuses a repeated time parameter and an explicitly empty calendarIds, before defaulting', async () => {
+      for (const q of ['timeMin=2026-01-01T00:00:00Z&timeMin=2026-02-01T00:00:00Z', 'timeMax=a&timeMax=b', 'timeZone=UTC&timeZone=CET']) {
+        const res = await request(app).get(`/api/v1/calendars/freebusy?${q}`).set(auth());
+        assert.equal(res.status, 400, q);
+        assert.match(res.body.error, /exactly once/);
+      }
+      for (const q of ['calendarIds=,', 'calendarIds=', 'calendarIds=%20,%20']) {
+        const res = await request(app).get(`/api/v1/calendars/freebusy?${q}`).set(auth());
+        assert.equal(res.status, 400, q);
+        assert.match(res.body.error, /calendarIds is empty/);
+      }
+    });
+
+    it('refuses a searchColumn that is a cell reference on update-by-field, before calling Google', async () => {
+      const res = await request(app).post('/api/v1/sheets/sheet-123/cells/update-by-field').set(auth())
+        .send({ searchColumn: 'A2', searchValue: 'x', fieldName: 'f', newValue: 'y' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /column letters/);
+    });
+
     it('refuses more than 50 calendars and an unparseable timeMin with 400', async () => {
       const many = Array.from({ length: 51 }, (_, i) => `c${i}@x.test`).join(',');
       const tooMany = await request(app).get(`/api/v1/calendars/freebusy?calendarIds=${many}`).set(auth());

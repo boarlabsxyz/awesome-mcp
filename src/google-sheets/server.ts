@@ -120,6 +120,12 @@ export async function performUpdateCellByFieldName(
   sheets: sheets_v4.Sheets,
   args: z.infer<typeof updateCellByFieldNameSchema>,
 ): Promise<UpdateCellByFieldNameResult> {
+  // Column letters only. "A2" would read the range A2:A2, so a match there is
+  // reported as row 1 and the write lands on the header row. Refused here, in
+  // the op both surfaces run, rather than with a Zod regex (root CLAUDE.md).
+  if (!/^[A-Za-z]+$/.test(args.searchColumn)) {
+    throw new UserError(`searchColumn must be column letters such as A or AA, not "${args.searchColumn.slice(0, 20)}".`);
+  }
   const [rowNumber, headers] = await Promise.all([
     SheetsHelpers.findRowByValue(sheets, args.spreadsheetId, args.searchColumn, args.searchValue, args.sheetName),
     SheetsHelpers.getHeaders(sheets, args.spreadsheetId, args.sheetName),
@@ -138,9 +144,8 @@ export async function performUpdateCellByFieldName(
   const rowData = await SheetsHelpers.getRowValues(sheets, args.spreadsheetId, rowNumber, args.sheetName);
 
   const colLetter = SheetsHelpers.columnIndexToLetter(colIndex);
-  const cellRef = args.sheetName
-    ? `${args.sheetName}!${colLetter}${rowNumber}`
-    : `${colLetter}${rowNumber}`;
+  // The same sheetRangePrefix the lookup, header and row reads use.
+  const cellRef = `${SheetsHelpers.sheetRangePrefix(args.sheetName)}${colLetter}${rowNumber}`;
 
   const oldValue = rowData[colIndex] !== undefined ? String(rowData[colIndex]) : null;
 

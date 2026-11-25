@@ -31,7 +31,6 @@ const NO_REST_PLANE: Record<string, string> = {
   'src/sandbox/server.ts': 'No RestService in src/restCatalog.ts.',
 };
 
-const PREDATES = 'Predates this guard; REST not decided yet.';
 const DESTRUCTIVE = 'Destructive: a REST sibling needs sign-off recorded in the catalog notes (root CLAUDE.md).';
 const UNIMPLEMENTED = 'Throws NOT_IMPLEMENTED (e2e/tools.ts): an endpoint would only advertise a 500.';
 
@@ -66,6 +65,11 @@ const MCP_ONLY: Partial<Record<RestService, Record<string, string>>> = {
   },
   redmine: {
     deleteProject: DESTRUCTIVE,
+  },
+  browserbase: {
+    // Always ends in a force release, like POST .../release, so in-progress
+    // browser work is lost. The owner declined a REST route for it.
+    end: DESTRUCTIVE,
   },
   supabase: {
     apply_migration: DESTRUCTIVE,
