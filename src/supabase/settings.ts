@@ -47,6 +47,22 @@ const ADAPTS_TO_READ_ONLY = new Set(['execute_sql', 'run_notebook']);
  */
 const BRANCH_ID_ONLY = new Set(['delete_branch', 'merge_branch', 'reset_branch', 'rebase_branch']);
 
+/** Which connection setting refused a call. */
+export type SupabaseSettingName = 'features' | 'projectRef' | 'readOnly';
+
+/**
+ * A call this connection's settings rule out. Still a UserError, so the MCP
+ * tool shows the message unchanged; the name and `setting` let the REST plane
+ * answer 403 naming the setting without matching on message text.
+ */
+export class SupabaseSettingDenied extends UserError {
+  readonly setting: SupabaseSettingName;
+  constructor(setting: SupabaseSettingName, message: string) {
+    super(message);
+    this.setting = setting;
+  }
+}
+
 /** A project ref: Supabase uses 20 lowercase letters; accept a little wider, never a URL or path. */
 const PROJECT_REF = /^[a-z0-9]{10,40}$/;
 
@@ -105,21 +121,21 @@ export function argsForSettings(
 ): Record<string, unknown> {
   const features = settings.features ?? SUPABASE_FEATURE_GROUPS;
   if (!(features as readonly string[]).includes(def.group)) {
-    throw new UserError(`'${def.name}' is in the ${def.group} feature group, which this Supabase connection has turned off. Turn it on in the connection's Settings on the dashboard.`);
+    throw new SupabaseSettingDenied('features', `'${def.name}' is in the ${def.group} feature group, which this Supabase connection has turned off. Turn it on in the connection's Settings on the dashboard.`);
   }
   if (settings.projectRef && def.group === 'account') {
-    throw new UserError(`'${def.name}' is an account tool, and this Supabase connection is limited to project ${settings.projectRef}, which turns account tools off. Remove the project limit in the connection's Settings to use it.`);
+    throw new SupabaseSettingDenied('projectRef', `'${def.name}' is an account tool, and this Supabase connection is limited to project ${settings.projectRef}, which turns account tools off. Remove the project limit in the connection's Settings to use it.`);
   }
   if (settings.projectRef && BRANCH_ID_ONLY.has(def.name)) {
-    throw new UserError(`'${def.name}' acts on a branch by its ID alone, and Supabase does not check which project that branch belongs to, so this connection (limited to project ${settings.projectRef}) does not offer it. Remove the project limit in the connection's Settings to use it.`);
+    throw new SupabaseSettingDenied('projectRef', `'${def.name}' acts on a branch by its ID alone, and Supabase does not check which project that branch belongs to, so this connection (limited to project ${settings.projectRef}) does not offer it. Remove the project limit in the connection's Settings to use it.`);
   }
   if (settings.readOnly && !def.annotations.readOnlyHint && !ADAPTS_TO_READ_ONLY.has(def.name)) {
-    throw new UserError(`'${def.name}' writes, and this Supabase connection is read-only. Turn read-only off in the connection's Settings to use it.`);
+    throw new SupabaseSettingDenied('readOnly', `'${def.name}' writes, and this Supabase connection is read-only. Turn read-only off in the connection's Settings to use it.`);
   }
   if (!settings.projectRef || !('project_id' in args)) return args;
   const { project_id, ...rest } = args;
   if (project_id !== undefined && project_id !== null && project_id !== settings.projectRef) {
-    throw new UserError(`This Supabase connection is limited to project ${settings.projectRef}; '${String(project_id)}' is a different project (a branch is its own project too). Nothing was run.`);
+    throw new SupabaseSettingDenied('projectRef', `This Supabase connection is limited to project ${settings.projectRef}; '${String(project_id)}' is a different project (a branch is its own project too). Nothing was run.`);
   }
   return rest;
 }

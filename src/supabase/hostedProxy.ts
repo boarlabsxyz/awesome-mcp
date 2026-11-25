@@ -80,6 +80,30 @@ export function capResult(text: string): string {
   );
 }
 
+/**
+ * Why a hosted call produced no usable answer. The MCP tool shows only the
+ * message; the REST plane picks its status from `kind` and `status`
+ * (src/supabase/restOps.ts), so it never has to match on message text.
+ *
+ * - `transport`: the HTTP exchange failed; `status` is the upstream HTTP
+ *   status when there was one (401/403/400/5xx), absent for a timeout or a
+ *   dropped connection.
+ * - `tool_error`: Supabase ran the tool and reported `isError`.
+ * - `input_required`: Supabase asked for a confirmation form this proxy cannot
+ *   show, so the action did NOT run.
+ */
+export type SupabaseCallFailure = 'transport' | 'tool_error' | 'input_required';
+
+export class SupabaseCallError extends UserError {
+  readonly kind: SupabaseCallFailure;
+  readonly status?: number;
+  constructor(kind: SupabaseCallFailure, message: string, status?: number) {
+    super(message);
+    this.kind = kind;
+    if (typeof status === 'number') this.status = status;
+  }
+}
+
 function targetFor(accessToken: string, settings?: SupabaseSettings): McpProxyTarget {
   return {
     // Same origin always; the connection's settings only add the three
@@ -102,8 +126,9 @@ function targetFor(accessToken: string, settings?: SupabaseSettings): McpProxyTa
 }
 
 /**
- * Run one hosted tool call. 401/403 come back as a UserError carrying
- * `.status`, so a REST route can answer with a status rather than a 500.
+ * Run one hosted tool call. 401/403 come back as a SupabaseCallError (a
+ * UserError) carrying `.status`, so a REST route can answer with a status
+ * rather than a 500.
  */
 export async function callSupabaseHostedTool(
   accessToken: string,
@@ -116,9 +141,7 @@ export async function callSupabaseHostedTool(
     return await callProxyTool(targetFor(accessToken, settings), name, args, options);
   } catch (err: any) {
     if (err?.status === 401 || err?.status === 403) {
-      const error: any = new UserError(err.message);
-      error.status = err.status;
-      throw error;
+      throw new SupabaseCallError('transport', err.message, err.status);
     }
     throw err;
   }
@@ -144,10 +167,12 @@ export function describeToolError(text: string): string {
 }
 
 /**
- * Call a hosted tool and return its text, raising a UserError for anything the
- * caller cannot use as an answer.
+ * Call a hosted tool and return its text, raising a SupabaseCallError for
+ * anything the caller cannot use as an answer. NOT capped: the MCP tool caps
+ * with `capResult` (runSupabaseTool), and the REST plane caps itself so it can
+ * say how much was cut in a field rather than only in prose.
  */
-export async function proxySupabaseTool(
+export async function proxySupabaseToolUncapped(
   accessToken: string,
   name: string,
   args: Record<string, unknown>,
@@ -159,7 +184,10 @@ export async function proxySupabaseTool(
     result = await callSupabaseHostedTool(accessToken, name, args, options, settings);
   } catch (err: any) {
     if (err instanceof UserError) throw err;
-    throw new UserError(capError(err?.message ?? String(err)));
+    // Keep a numeric upstream status (a 400 refusal, a 5xx) so REST can route
+    // on it; a timeout or a dropped connection has none.
+    const status = typeof err?.status === 'number' ? err.status : undefined;
+    throw new SupabaseCallError('transport', capError(err?.message ?? String(err)), status);
   }
 
   // The 2026-07-28 revision lets a server answer with a request for input (a
@@ -168,12 +196,13 @@ export async function proxySupabaseTool(
   // honest answer is that the action did not run, not an empty success.
   const resultType = (result.raw as { resultType?: unknown } | undefined)?.resultType;
   if (resultType === 'input_required') {
-    throw new UserError(
+    throw new SupabaseCallError(
+      'input_required',
       `Supabase asked for interactive confirmation before running '${name}', which this connector cannot display, so the action was NOT performed. ` +
         'Run it from a client connected to https://mcp.supabase.com/mcp directly, or from the Supabase dashboard.',
     );
   }
 
-  if (result.isError) throw new UserError(`Supabase ${name} failed: ${describeToolError(result.text)}`);
-  return capResult(result.text);
+  if (result.isError) throw new SupabaseCallError('tool_error', `Supabase ${name} failed: ${describeToolError(result.text)}`);
+  return result.text;
 }
