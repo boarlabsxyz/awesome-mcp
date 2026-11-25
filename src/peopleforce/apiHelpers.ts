@@ -1478,13 +1478,108 @@ export function formatLocationList(
   });
 }
 
-export function formatSalaries(salaries: PeopleForceSalary[]): string {
+function salaryGroupKey(s: PeopleForceSalary): string {
+  const c = s.compensation_component;
+  if (!c) return 'none';
+  if (c.id !== undefined && c.id !== null) return `id:${c.id}`;
+  return c.name ? `name:${c.name}` : 'none';
+}
+
+/**
+ * Sorts salary records newest first (effective_on desc, a missing date last,
+ * ties broken by id desc) and flags the one in force today for each
+ * compensation component. A component is its own group, so a bonus never
+ * displaces a base salary; a record with no component is a group of its own
+ * (it is not merged with an explicit component). Future-dated records are
+ * never current. Returns new objects; the input is not mutated.
+ *
+ * @param today ISO date (YYYY-MM-DD). Injected so callers/tests are not at the
+ *   mercy of the host clock. The default is the UTC date, so a raise effective
+ *   today in a UTC+N tenant reads as scheduled for up to N hours.
+ */
+export function markCurrentSalaries(
+  salaries: PeopleForceSalary[],
+  today: string = new Date().toISOString().slice(0, 10),
+): Array<PeopleForceSalary & { current: boolean }> {
+  const sorted = [...salaries].sort((x, y) => {
+    const dx = x.effective_on ?? '';
+    const dy = y.effective_on ?? '';
+    if (dx !== dy) {
+      if (!dx) return 1;
+      if (!dy) return -1;
+      return dx < dy ? 1 : -1;
+    }
+    return (y.id ?? 0) - (x.id ?? 0);
+  });
+  const seen = new Set<string>();
+  return sorted.map((s) => {
+    const key = salaryGroupKey(s);
+    const current = !seen.has(key) && !!s.effective_on && s.effective_on <= today;
+    if (current) seen.add(key);
+    return { ...s, current };
+  });
+}
+
+function salaryGroupLabel(s: PeopleForceSalary): string {
+  const c = s.compensation_component;
+  if (!c) return 'no component';
+  if (c.name) return c.name;
+  return c.id !== undefined && c.id !== null ? `component ${c.id}` : 'no component';
+}
+
+function salaryAmount(s: PeopleForceSalary): string {
+  return `${s.amount ?? '?'} ${s.currency_code ?? ''}${s.per ? ` per ${s.per}` : ''}`.replace(/ +/g, ' ').trim();
+}
+
+export function formatSalaries(
+  salaries: PeopleForceSalary[],
+  today: string = new Date().toISOString().slice(0, 10),
+): string {
   if (salaries.length === 0) return 'No salary records found for this employee.';
-  const sorted = [...salaries].sort((x, y) => String(y.effective_on ?? '').localeCompare(String(x.effective_on ?? '')));
+  const marked = markCurrentSalaries(salaries, today);
+  const groups = new Map<string, Array<PeopleForceSalary & { current: boolean }>>();
+  for (const s of marked) {
+    const key = salaryGroupKey(s);
+    const group = groups.get(key);
+    if (group) group.push(s);
+    else groups.set(key, [s]);
+  }
+  // Only dated records say anything about when a rate applied, so neither the
+  // previous rate nor the next scheduled one is ever an undated record. The
+  // previous rate is the newest one dated strictly before the current one: a
+  // record sharing the current date lost the id tie-break, it never applied.
+  const lines: Array<{ group: Array<PeopleForceSalary & { current: boolean }>; render: (label: string) => string }> = [];
+  for (const group of groups.values()) {
+    const idx = group.findIndex((s) => s.current);
+    if (idx >= 0) {
+      const cur = group[idx];
+      const prev = group.slice(idx + 1).find((s) => s.effective_on && s.effective_on < cur.effective_on!);
+      const before = prev ? ` (previously ${salaryAmount(prev)}, from ${prev.effective_on})` : '';
+      lines.push({ group, render: (label) => `Current${label}: ${salaryAmount(cur)}, effective ${cur.effective_on}${before}` });
+    } else {
+      // Every dated record here is future-dated. The next rate is the earliest
+      // date's highest id: the one markCurrentSalaries will mark current then.
+      const dated = group.filter((s) => s.effective_on);
+      const firstDate = dated[dated.length - 1]?.effective_on;
+      const next = dated.find((s) => s.effective_on === firstDate);
+      if (next) lines.push({ group, render: (label) => `No current rate${label}: next ${salaryAmount(next)} from ${next.effective_on}` });
+    }
+  }
+  // Label lines only when there is more than one of them, and add the
+  // component id when two components share a name, so every line is distinct.
+  const names = lines.map((l) => salaryGroupLabel(l.group[0]));
+  const summary = lines.map((l, i) => {
+    if (lines.length < 2) return l.render('');
+    const id = l.group[0].compensation_component?.id;
+    const clash = names.filter((n) => n === names[i]).length > 1 && id !== undefined && id !== null;
+    return l.render(` (${names[i]}${clash ? `, id ${id}` : ''})`);
+  });
   const parts = ['# Salary History (newest first)', ''];
-  sorted.forEach((s, i) => {
+  if (summary.length) parts.push(...summary, '');
+  marked.forEach((s, i) => {
+    const status = s.current ? ' (current)' : s.effective_on && s.effective_on > today ? ' (scheduled)' : '';
     const per = s.per ? ` per ${s.per}` : '';
-    parts.push(`## ${i + 1}. ${s.amount ?? '?'} ${s.currency_code ?? ''}${per}`.trimEnd());
+    parts.push(`## ${i + 1}. ${s.amount ?? '?'} ${s.currency_code ?? ''}${per}`.trimEnd() + status);
     if (s.effective_on) parts.push(`Effective on: ${s.effective_on}`);
     if (s.compensation_component?.name) parts.push(`Component: ${s.compensation_component.name}${s.compensation_component.frequency ? ` (${s.compensation_component.frequency})` : ''}`);
     if (s.pay_schedule?.name) parts.push(`Pay schedule: ${s.pay_schedule.name}`);

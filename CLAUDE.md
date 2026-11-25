@@ -65,6 +65,7 @@ Per-provider files are listed in each provider's `CLAUDE.md`.
 | File | Contains |
 |------|----------|
 | `src/types.ts` | Zod schemas, hex color validation, style parameter definitions |
+| `src/auth/compensationAccess.ts` | `mayViewCompensation` + `requireCompensationAccessFor` — operator allowlist (`PEOPLEFORCE_COMPENSATION_EMAILS` ∪ `ADMIN_EMAILS`) for PeopleForce salary tools and the REST route |
 | `src/restCatalog.ts` | Single source of truth for the REST plane (drives `docs/REST_ENDPOINTS.md` and the OpenAPI specs) |
 | `src/mcpInstancePath.ts` | `/mcp/<instanceId>` — the path form of an instance URL: the proxy rewrite and the per-instance `resource_metadata` URL |
 | `src/util/mcpProxyClient.ts` | Streamable-HTTP MCP transport shared by Browserbase, Pinecone and Supabase: per-call transport, SSE frames, the legacy `initialize` path and the stateless `protocol: 'modern'` path; a replica-affine session is never cached |

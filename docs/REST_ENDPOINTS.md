@@ -296,7 +296,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 
 | MCP tool | REST endpoint | Status | Summary |
 |---|---|---|---|
-| `listEmployeeSalaries` | `GET /api/v1/peopleforce/employees/{employeeId}/salaries` | live | List an employee salary history — _v3. Needs a Company API key allowed to view compensation; otherwise 403. Follows the key restriction, not the caller._ |
+| `listEmployeeSalaries` | `GET /api/v1/peopleforce/employees/{employeeId}/salaries` | live | List an employee salary history — _v3. Operator allowlist first (PEOPLEFORCE_COMPENSATION_EMAILS or ADMIN_EMAILS): 403 compensation_restricted. Then the key restriction: 403 compensation_forbidden_by_key. Records newest first with a boolean current flag; future-dated is never current._ |
 | `listHolidays` | `GET /api/v1/peopleforce/holidays` | live | List company public holidays — _v3, paginated (?page=). working: true marks a working-day exception, not a day off._ |
 | `listHolidayPolicies` | `GET /api/v1/peopleforce/holiday-policies` | live | List holiday policies |
 | `listEmployeeHolidays` | `GET /api/v1/peopleforce/employees/{employeeId}/holidays` | live | List the public holidays that apply to one employee — _v3, paginated (?page=)._ |

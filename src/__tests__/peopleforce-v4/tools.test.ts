@@ -171,9 +171,20 @@ describe('tool arguments reach the wire', () => {
   });
 
   test('person-scoped tools build the nested path', async () => {
-    assert.equal((await run('listPersonSalaries', { personId: 42 })).pathname, '/api/v4/people/42/compensation/salaries');
+    // The salary tools refuse callers outside PEOPLEFORCE_COMPENSATION_EMAILS /
+    // ADMIN_EMAILS, so this session gets an allowlisted email for the test.
+    const saved = process.env.PEOPLEFORCE_COMPENSATION_EMAILS;
+    process.env.PEOPLEFORCE_COMPENSATION_EMAILS = 'hr@example.com';
+    session.email = 'hr@example.com';
+    try {
+      assert.equal((await run('listPersonSalaries', { personId: 42 })).pathname, '/api/v4/people/42/compensation/salaries');
+      assert.equal((await run('getPersonSalary', { personId: 42, salaryId: 9 })).pathname, '/api/v4/people/42/compensation/salaries/9');
+    } finally {
+      delete session.email;
+      if (saved === undefined) delete process.env.PEOPLEFORCE_COMPENSATION_EMAILS;
+      else process.env.PEOPLEFORCE_COMPENSATION_EMAILS = saved;
+    }
     assert.equal((await run('listPersonLifecycles', { personId: 42 })).pathname, '/api/v4/people/42/lifecycles');
-    assert.equal((await run('getPersonSalary', { personId: 42, salaryId: 9 })).pathname, '/api/v4/people/42/compensation/salaries/9');
   });
 
   test('getPerson forwards include_historical_values only when asked', async () => {

@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { UserSession } from '../userSession.js';
 import { createMcpAuthenticateHandler } from '../mcpAuthenticate.js';
 import { isoDate } from '../util/isoDate.js';
+import { requireCompensationAccessFor } from '../auth/compensationAccess.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import {
@@ -61,11 +62,14 @@ import {
   EMPLOYEE_STATUS_VALUES,
 } from './apiHelpers.js';
 
-export const peopleForceServer = instrumentServer(new FastMCP<UserSession>({
+/** Tools that return employee compensation; see src/auth/compensationAccess.ts. */
+export const PEOPLEFORCE_COMPENSATION_TOOLS: ReadonlySet<string> = new Set(['listEmployeeSalaries']);
+
+export const peopleForceServer = requireCompensationAccessFor(instrumentServer(new FastMCP<UserSession>({
   name: 'PeopleForce MCP',
   version: '1.0.0',
   authenticate: createMcpAuthenticateHandler(process.env.MCP_SLUG || 'peopleforce'),
-}), 'peopleforce');
+}), 'peopleforce'), PEOPLEFORCE_COMPENSATION_TOOLS);
 
 // PeopleForce publishes 45 live REST endpoints (src/restCatalog.ts), and
 // public/openapi-peopleforce.json documents their auth as "a 5-minute bearer
@@ -474,7 +478,8 @@ peopleForceServer.addTool({
   name: 'listEmployeeSalaries',
   annotations: { readOnlyHint: true },
   description: 'Lists an employee\'s salary history (amount, currency, pay period, effective date, compensation component). '
-    + 'Only works when the connected Company API key is allowed to view compensation; the answer follows the key\'s restriction, not the asking person\'s.',
+    + 'Restricted: the server operator allowlist (PEOPLEFORCE_COMPENSATION_EMAILS or ADMIN_EMAILS) applies first, then the connected Company API key must itself be allowed to view compensation. '
+    + 'Records come newest first; the one in force today is marked Current (a future-dated one is "scheduled") with the previous rate beside it.',
   parameters: z.object({ employeeId: z.union([z.string(), z.number()]).describe('The employee ID.') }),
   execute: (args, { log, session }) =>
     withPeopleForceClient('Failed to list salaries', session, log, async (client) => {

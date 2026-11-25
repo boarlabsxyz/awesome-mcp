@@ -4167,7 +4167,7 @@
       "get": {
         "operationId": "listPeopleForceEmployeeSalaries",
         "summary": "List an employee salary history",
-        "description": "v3. Amount, currency, pay period, effective date and compensation component. Needs a Company API key allowed to view compensation; otherwise 403.",
+        "description": "v3. Amount, currency, pay period, effective date and compensation component. Restricted: the caller must be on the server operator allowlist (PEOPLEFORCE_COMPENSATION_EMAILS or ADMIN_EMAILS), otherwise 403 with code compensation_restricted. The connected Company API key must also be allowed to view compensation, otherwise 403 with code compensation_forbidden_by_key.",
         "tags": [
           "PeopleForce"
         ],
@@ -4198,7 +4198,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Raw upstream PeopleForce payload, or markdown when format=text.",
+            "description": "The upstream PeopleForce payload with data re-sorted newest first (effective_on descending, undated last) and each record carrying a boolean current flag (the newest record per compensation component effective on or before today, UTC); other top-level keys are kept. Markdown when format=text.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4224,7 +4224,7 @@
             }
           },
           "403": {
-            "description": "No PeopleForce connection on this account, or upstream denied the call.",
+            "description": "Code compensation_restricted: the caller is not on the operator allowlist. Code compensation_forbidden_by_key: the PeopleForce key lacks People > Compensation. Otherwise no PeopleForce connection on this account.",
             "content": {
               "application/json": {
                 "schema": {
