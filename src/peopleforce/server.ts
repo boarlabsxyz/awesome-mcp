@@ -478,7 +478,8 @@ peopleForceServer.addTool({
   name: 'listEmployeeSalaries',
   annotations: { readOnlyHint: true },
   description: 'Lists an employee\'s salary history (amount, currency, pay period, effective date, compensation component). '
-    + 'Only works when the connected Company API key is allowed to view compensation; the answer follows the key\'s restriction, not the asking person\'s.',
+    + 'Restricted: the server operator allowlist (PEOPLEFORCE_COMPENSATION_EMAILS or ADMIN_EMAILS) applies first, then the connected Company API key must itself be allowed to view compensation. '
+    + 'Records come newest first; the one in force today is marked Current (a future-dated one is "scheduled") with the previous rate beside it.',
   parameters: z.object({ employeeId: z.union([z.string(), z.number()]).describe('The employee ID.') }),
   execute: (args, { log, session }) =>
     withPeopleForceClient('Failed to list salaries', session, log, async (client) => {

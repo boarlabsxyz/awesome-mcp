@@ -24,7 +24,11 @@
 - `formatObjectiveList`/`formatKpiList` surface owner `id`+`email`; KB `body` may be an object (`formatKnowledgeArticle`); `formatCustomFields` strips HTML.
 
 ### Salaries, holidays, absences (v3; NOT exercised live)
-- **`listEmployeeSalaries` follows the key's compensation restriction**, not the asking person's; a 403 is that restriction, and the MCP message says so.
+- **Salary reads are gated by an operator allowlist** (`mayViewCompensation` in `src/auth/compensationAccess.ts`) — the Company key belongs to the connection owner but other users ask through it, so the key's own restriction alone would expose pay to everyone. Covers `listEmployeeSalaries`, v4 `listPersonSalaries`/`getPersonSalary` and the REST salaries route; refused before any upstream call.
+- **Allowlist = `PEOPLEFORCE_COMPENSATION_EMAILS` ∪ `ADMIN_EMAILS`** (comma-separated, case-insensitive). Unset ⇒ admins only (fail closed). Read per call, so an edit takes effect on restart. Set it on the web, peopleforce and peopleforce-v4 services — each process reads its own env.
+- **Two distinct 403s** — not on the allowlist: `COMPENSATION_RESTRICTED_MESSAGE` / REST `compensation_restricted`; allowlisted but the key lacks People → Compensation (upstream 403): its own message / REST `compensation_forbidden_by_key`. Never reuse the generic "check your key" text.
+- **Current salary is marked per compensation component** (`markCurrentSalaries`): newest first (effective_on desc, undated last, ties by id desc); `current` = newest record per `compensation_component.id` with effective_on <= today. Future-dated is never current ("(scheduled)"); text starts with one "Current: ..." line per group. Today is the UTC date, so for a UTC+N tenant a raise effective today reads as scheduled for up to N hours.
+- **Residual ungated surfaces** — tenant custom fields and custom tables (e.g. an Invoice sheet link, `getEmployeeTable`) and their snapshot copies (`pf_employee_custom_field_snapshot`, `pf_employee_table_cell_snapshot`) can hold pay data and are not gated. Recruitment candidates' salary expectation (`getCandidate`, `getCandidateDossier` and their REST routes) is deliberately ungated: it is not employee compensation.
 - **`getEmployeeAbsences` = approved (optionally pending) leave + the employee's holidays**, overlap-checked here, 10 pages per source then `truncated`. v2 ignored `employee_id` on /leave_requests; v3 documents it, but rows for anyone else are still dropped (`mine`).
 - **Holidays: the day off can be `observed_on` or `compensated_on`**, not the date itself — both count for overlap. `working: true` is a worked day, listed apart, never as an absence.
 
@@ -33,6 +37,7 @@
 - **Validate with the tools' schemas** (`createLeaveRequestSchema`, `moveVacancyApplicationSchema`, `disqualifyVacancyApplicationSchema`, `addCandidateNoteSchema`) via `safeParse` → 400; never hand-roll checks.
 - **Path params override body keys.** Move/disqualify re-read the application.
 - **`disqualifyVacancyApplication` is not idempotent.**
+- **The salaries route is not a raw passthrough** — `data[]` is re-sorted newest first and each record gains `current`; other top-level keys are kept. Gated by the allowlist above.
 - **Every route resolves its token via `peopleForceToken()`** (403 if not connected) — else a Google session sends an undefined bearer. `peopleForceBaseUrl` is optional.
 
 ### Trends → snapshot collector

@@ -377,7 +377,8 @@ addPersonScopedListTool({
   name: 'listPersonSalaries',
   description:
     'List a person\'s salary history (amount, currency, pay period, effective date). Needs Compensation granted on ' +
-    'the service account\'s role — without it the call 403s rather than returning an empty list.',
+    'the service account\'s role — without it the call 403s rather than returning an empty list. Restricted to the server operator allowlist ' +
+    '(PEOPLEFORCE_COMPENSATION_EMAILS or ADMIN_EMAILS) before any upstream call.',
   errorPrefix: 'Error listing person salaries',
   fetch: (client, personId) => client.listPersonSalaries(personId),
   format: formatSalaryList,
@@ -386,7 +387,7 @@ addPersonScopedListTool({
 peopleForceV4Server.addTool({
   name: 'getPersonSalary',
   annotations: { readOnlyHint: true },
-  description: 'Get a single salary record for a person. Needs Compensation granted on the service account\'s role.',
+  description: 'Get a single salary record for a person. Needs Compensation granted on the service account\'s role, and the caller must be on the server operator allowlist (PEOPLEFORCE_COMPENSATION_EMAILS or ADMIN_EMAILS).',
   parameters: z.object({
     personId: idArg.describe('The person ID.'),
     salaryId: idArg.describe('The salary record ID (from listPersonSalaries).'),
