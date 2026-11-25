@@ -164,6 +164,30 @@ describe('salaries', () => {
     assert.ok(clash.includes('Current (Pay, id 2): 2.00 USD per hour'));
   });
 
+  test('a clashing label gets the id only where there is one', () => {
+    const noId = formatSalaries([
+      hourly(1, '2026-01-01', '1.00', { compensation_component: { name: 'Pay' } }),
+      hourly(2, '2026-01-01', '2.00', { compensation_component: { id: 2, name: 'Pay' } }),
+    ], TODAY);
+    assert.ok(noId.includes('Current (Pay): 1.00 USD per hour'));
+    assert.ok(noId.includes('Current (Pay, id 2): 2.00 USD per hour'));
+    assert.doesNotMatch(noId, /id undefined/);
+    const fallback = formatSalaries([
+      hourly(1, '2026-01-01', '1.00', { compensation_component: { id: 5 } }),
+      hourly(2, '2026-01-01', '2.00', { compensation_component: { name: 'component 5' } }),
+    ], TODAY);
+    assert.ok(fallback.includes('Current (component 5, id 5): 1.00 USD per hour'));
+    assert.ok(fallback.includes('Current (component 5): 2.00 USD per hour'));
+  });
+
+  test('an empty component object is the same group as no component', () => {
+    const out = formatSalaries([
+      hourly(1, '2026-01-01', '1.00', { compensation_component: {} }),
+      hourly(2, '2026-02-01', '2.00'),
+    ], TODAY);
+    assert.match(out, /^Current: 2\.00 USD per hour, effective 2026-02-01 \(previously 1\.00 USD per hour, from 2026-01-01\)$/m);
+  });
+
   test('a group with only undated records adds no line and does not switch labels on', () => {
     const out = formatSalaries([
       { id: 9, amount: '5.00', currency_code: 'USD', per: 'hour', compensation_component: { id: 2, name: 'Bonus' } },

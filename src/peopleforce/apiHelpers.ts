@@ -1565,7 +1565,7 @@ export function formatSalaries(
   const summary = lines.map((l, i) => {
     if (lines.length < 2) return l.render('');
     const id = l.group[0].compensation_component?.id;
-    const clash = names.filter((n) => n === names[i]).length > 1 && id !== undefined && id !== null && names[i] !== `component ${id}`;
+    const clash = names.filter((n) => n === names[i]).length > 1 && id !== undefined && id !== null;
     return l.render(` (${names[i]}${clash ? `, id ${id}` : ''})`);
   });
   const parts = ['# Salary History (newest first)', ''];
