@@ -120,6 +120,71 @@ describe('salaries', () => {
     assert.deepEqual(out.filter((s) => s.current).map((s) => s.id).sort(), [2, 4]);
   });
 
+  test('a future-dated record is never current, even as the only one in its group', () => {
+    const out = markCurrentSalaries([hourly(1, '2026-11-25', '30.00'), hourly(2, '2026-11-24', '22.00')], TODAY);
+    assert.deepEqual(out.map((s) => [s.id, s.current]), [[1, false], [2, true]]);
+    const solo = markCurrentSalaries([hourly(3, '2026-11-25', '30.00')], TODAY);
+    assert.deepEqual(solo.map((s) => s.current), [false]);
+  });
+
+  test('groups by component id: same name with different ids stays apart, same id merges', () => {
+    const out = markCurrentSalaries([
+      hourly(1, '2026-01-01', '1.00', { compensation_component: { id: 1, name: 'Pay' } }),
+      hourly(2, '2026-02-01', '2.00', { compensation_component: { id: 2, name: 'Pay' } }),
+      hourly(3, '2026-03-01', '3.00', { compensation_component: { id: 1, name: 'Pay (renamed)' } }),
+    ], TODAY);
+    assert.deepEqual(out.map((s) => [s.id, s.current]), [[3, true], [2, true], [1, false]]);
+  });
+
+  test('equal dates are ordered by id whatever the input order', () => {
+    for (const input of [
+      [hourly(5, '2026-01-01', '1.00'), hourly(9, '2026-01-01', '2.00'), hourly(7, '2026-01-01', '3.00')],
+      [hourly(9, '2026-01-01', '2.00'), hourly(7, '2026-01-01', '3.00'), hourly(5, '2026-01-01', '1.00')],
+    ]) {
+      assert.deepEqual(markCurrentSalaries(input, TODAY).map((s) => s.id), [9, 7, 5]);
+    }
+    const out = formatSalaries([hourly(5, '2026-01-01', '1.00'), hourly(9, '2026-01-01', '2.00')], TODAY);
+    assert.ok(out.includes('Current: 2.00 USD per hour, effective 2026-01-01 (previously 1.00 USD per hour, from 2026-01-01)'));
+  });
+
+  test('previously is the next-older dated record in the same group, past any scheduled or other-component one', () => {
+    const base = { id: 1, name: 'Base' };
+    const bonus = { id: 2, name: 'Bonus' };
+    const out = formatSalaries([
+      hourly(1, '2024-01-01', '10.00', { compensation_component: base }),
+      hourly(2, '2025-01-01', '15.00', { compensation_component: base }),
+      hourly(3, '2026-01-01', '20.00', { compensation_component: base }),
+      hourly(4, '2027-01-01', '25.00', { compensation_component: base }),
+      hourly(5, '2025-06-01', '99.00', { compensation_component: bonus }),
+    ], TODAY);
+    assert.ok(out.includes('Current (Base): 20.00 USD per hour, effective 2026-01-01 (previously 15.00 USD per hour, from 2025-01-01)'));
+    assert.ok(out.includes('Current (Bonus): 99.00 USD per hour, effective 2025-06-01\n'));
+  });
+
+  test('an undated record is never cited as the previous rate', () => {
+    const out = formatSalaries([
+      { id: 9, amount: '5.00', currency_code: 'USD', per: 'hour' },
+      hourly(1, '2026-01-01', '22.00'),
+    ], TODAY);
+    assert.ok(out.includes('Current: 22.00 USD per hour, effective 2026-01-01\n'));
+    assert.doesNotMatch(out, /previously/);
+    const withOlder = formatSalaries([
+      hourly(1, '2025-01-01', '18.00'),
+      { id: 9, amount: '5.00', currency_code: 'USD', per: 'hour' },
+      hourly(2, '2026-01-01', '22.00'),
+    ], TODAY);
+    assert.ok(withOlder.includes('(previously 18.00 USD per hour, from 2025-01-01)'));
+  });
+
+  test('a component with an id but no name is labelled by its id', () => {
+    const out = formatSalaries([
+      hourly(1, '2026-01-01', '22.00', { compensation_component: { id: 42 } }),
+      hourly(2, '2026-01-01', '500.00', { compensation_component: { id: 2, name: 'Bonus' } }),
+    ], TODAY);
+    assert.ok(out.includes('Current (component 42): 22.00 USD per hour, effective 2026-01-01'));
+    assert.doesNotMatch(out, /undefined/);
+  });
+
   test('every field of a record reaches the output', () => {
     const out = formatSalaries([hourly(1, '2026-01-01', '22.00', { comment: 'Annual review' })], TODAY);
     for (const needle of ['22.00', 'USD', 'hour', '2026-01-01', 'Annual review']) assert.ok(out.includes(needle), needle);

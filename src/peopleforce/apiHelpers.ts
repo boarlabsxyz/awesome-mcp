@@ -1520,6 +1520,13 @@ export function markCurrentSalaries(
   });
 }
 
+function salaryGroupLabel(s: PeopleForceSalary): string {
+  const c = s.compensation_component;
+  if (!c) return 'no component';
+  if (c.name) return c.name;
+  return c.id !== undefined && c.id !== null ? `component ${c.id}` : 'no component';
+}
+
 function salaryAmount(s: PeopleForceSalary): string {
   return `${s.amount ?? '?'} ${s.currency_code ?? ''}${s.per ? ` per ${s.per}` : ''}`.replace(/ +/g, ' ').trim();
 }
@@ -1537,11 +1544,13 @@ export function formatSalaries(
   }
   const summary: string[] = [];
   for (const group of groups.values()) {
-    const label = groups.size > 1 ? ` (${group[0].compensation_component?.name ?? 'no component'})` : '';
+    const label = groups.size > 1 ? ` (${salaryGroupLabel(group[0])})` : '';
     const idx = group.findIndex((s) => s.current);
     if (idx >= 0) {
       const cur = group[idx];
-      const prev = group[idx + 1];
+      // The next-older DATED record; an undated one says nothing about when
+      // it applied, so it is never cited as the previous rate.
+      const prev = group.slice(idx + 1).find((s) => s.effective_on);
       const before = prev ? ` (previously ${salaryAmount(prev)}${prev.effective_on ? `, from ${prev.effective_on}` : ''})` : '';
       summary.push(`Current${label}: ${salaryAmount(cur)}, effective ${cur.effective_on}${before}`);
     } else {
