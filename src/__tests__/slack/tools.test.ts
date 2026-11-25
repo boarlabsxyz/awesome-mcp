@@ -118,4 +118,37 @@ describe('slack-bot tool registry', () => {
     assert.equal(shape.unfurlLinks, undefined);
     assert.equal(shape.unfurlMedia, undefined);
   });
+
+  // openDm and findCanvasSections now run the same ops as their REST routes;
+  // the tool text must not change. Slack is reached over a stubbed fetch.
+  describe('tool bodies shared with REST', () => {
+    const session = { slackBotToken: 'xoxb-test' };
+    async function withSlack(replies: Record<string, unknown>, fn: () => Promise<any>): Promise<any> {
+      const real = globalThis.fetch;
+      globalThis.fetch = (async (input: any) => {
+        const method = String(input).replace('https://slack.com/api/', '');
+        return new Response(JSON.stringify(replies[method] ?? { ok: false, error: 'unstubbed' }), { status: 200 });
+      }) as typeof fetch;
+      try { return await fn(); } finally { globalThis.fetch = real; }
+    }
+
+    it('openDm renders the channel id, 1-on-1 and group', async () => {
+      const one = await withSlack({ 'conversations.open': { ok: true, channel: { id: 'D1' } } },
+        () => toolMap.get('openDm').execute({ userId: 'U1' }, { session }));
+      assert.match(one, /^DM channel opened: D1/);
+      const group = await withSlack({ 'conversations.open': { ok: true, channel: { id: 'G1' } } },
+        () => toolMap.get('openDm').execute({ userIds: ['U1', 'U2'] }, { session }));
+      assert.match(group, /^Group DM with 2 people opened: G1/);
+    });
+
+    it('findCanvasSections refuses no criteria and lists the ids it finds', async () => {
+      await assert.rejects(toolMap.get('findCanvasSections').execute({ canvasId: 'F1' }, { session }), /containsText and\/or sectionTypes/);
+      const found = await withSlack({ 'canvases.sections.lookup': { ok: true, sections: [{ id: 's1' }, { id: 's2' }] } },
+        () => toolMap.get('findCanvasSections').execute({ canvasId: 'F1', containsText: 'x' }, { session }));
+      assert.equal(found, '2 section(s): s1, s2');
+      const none = await withSlack({ 'canvases.sections.lookup': { ok: true, sections: [] } },
+        () => toolMap.get('findCanvasSections').execute({ canvasId: 'F1', sectionTypes: ['h1'] }, { session }));
+      assert.equal(none, 'No matching sections.');
+    });
+  });
 });

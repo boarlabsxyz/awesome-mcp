@@ -39,6 +39,7 @@ REST-plane handlers for this service: see src/website/CLAUDE.md.
 - **`restRoutes.ts` takes `server.ts` as an argument, by type only** — `server.ts` constructs an MCP server on import, so `webServer.ts` imports it per request. The original creates stay hand-written there; `createTask` joined the engagement table.
 - **`POST /properties/{objectType}/{propertyName}` needs the COMPLETE `options` list** — HubSpot treats it as the whole set, so sending only the new option drops the others. UNVERIFIED against a live portal.
 - **400, 409 and 429 keep their status** (`hubspotPassthroughStatus`) — `sendUpstreamError` would turn them into 500.
+- **Search is `POST /{companies,contacts,deals}/search`** — a read over POST because filters are objects. Registered before the `POST /{label}/:id` updates, or `search` would be read as a record id. Bodies use `searchObjectFields(label)`, also the tools' parameters; the query-or-filter guard is `assertSearchCriteria` in execute, no longer a Zod refine.
 
 ## Source Files
 

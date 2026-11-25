@@ -953,7 +953,7 @@ export async function opUpdateVersion(client: RedmineClient, args: z.infer<typeo
 export async function opDeleteVersion(client: RedmineClient, args: z.infer<typeof deleteVersionSchema>, log: RedmineToolLog): Promise<string> {
   log.info(`Deleting Redmine version ${args.versionId}`);
   await client.deleteVersion(args.versionId);
-  return `Deleted version #${args.versionId}. Issues that targeted it now have no target version.`;
+  return `Deleted version #${args.versionId}.`;
 }
 
 /** Body of the `listIssueCategories` tool. */

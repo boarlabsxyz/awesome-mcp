@@ -460,7 +460,7 @@ redmineServer.addTool({
 redmineServer.addTool({
   name: 'deleteVersion',
   annotations: { readOnlyHint: false, destructiveHint: true },
-  description: 'Permanently delete a Redmine version. Issues targeting it are not deleted — their target version is cleared.',
+  description: 'Permanently delete a Redmine version. Redmine refuses (422) while any blocker remains: issues that target it (reassign or clear their target version), a custom field value referencing it (clear it), or files attached to it (delete them).',
   parameters: deleteVersionSchema,
   execute: (args, { log, session }) =>
     withRedmineClient('Failed to delete version', session, log, client => opDeleteVersion(client, args, log)),

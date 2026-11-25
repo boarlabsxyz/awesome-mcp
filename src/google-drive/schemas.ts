@@ -44,6 +44,12 @@ export const trashFileRestSchema = deleteFileSchema.refine((v) => v.skipTrash !=
   path: ['skipTrash'],
 });
 
+export const createDocumentSchema = z.object({
+  title: z.string().min(1).describe('Title for the new document.'),
+  parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
+  initialContent: z.string().optional().describe('Initial text content to add to the document.'),
+});
+
 export const createFromTemplateSchema = z.object({
   templateId: z.string().describe('ID of the template document to copy from.'),
   newTitle: z.string().min(1).describe('Title for the new document.'),

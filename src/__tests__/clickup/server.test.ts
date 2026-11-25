@@ -2706,3 +2706,24 @@ describe('ClickUp server tools', () => {
     });
   });
 });
+
+describe('subscribeToTaskEvents tool (shares performSubscribeToTaskEvents with REST)', () => {
+  const tool = () => toolMap.get('subscribeToTaskEvents')!;
+
+  it('refuses a session with no user', async () => {
+    await assert.rejects(tool().execute({ workspaceId: 'W1' }, { session: { clickUpAccessToken: 't' } }), /logged-in user context/);
+  });
+
+  it('turns a missing BASE_URL into a UserError naming it', async () => {
+    const saved = process.env.BASE_URL;
+    delete process.env.BASE_URL;
+    try {
+      await assert.rejects(
+        tool().execute({ workspaceId: 'W1' }, { session: { userId: 5, clickUpAccessToken: 't' } }),
+        (err: any) => err.name === 'UserError' && /BASE_URL/.test(err.message),
+      );
+    } finally {
+      if (saved !== undefined) process.env.BASE_URL = saved;
+    }
+  });
+});

@@ -10,11 +10,12 @@
 // shared with the MCP tools, so the two surfaces cannot disagree about what is
 // valid.
 //
-// Note which tools are NOT here. `act` has no REST sibling on purpose — it
-// submits forms on third-party systems, this plane accepts the permanent
-// dashboard API key, and a curl has no confirmation affordance. `end` has none
-// either, because releaseSession reaches the same operation by id and works in
-// states the proxy call does not. See the notes in src/restCatalog.ts.
+// `act` joined this plane on the owner request for full REST coverage of
+// non-destructive writes: it submits forms and clicks buttons on third-party
+// systems and the plane accepts the permanent dashboard API key, with no
+// confirmation affordance behind a curl; that was accepted knowingly. `end` has
+// no route: it always ends in a force release, like `release`, and the owner
+// declined REST for it (its op, performEnd, lives in ops.ts).
 
 import {
   BrowserbaseClient,
@@ -179,5 +180,20 @@ export async function performExtract(
     ...(args.instruction ? { instruction: args.instruction } : {}),
     sessionId,
   });
+  return { sessionId, result: safePayload(text) };
+}
+
+/**
+ * One action on the current page. Domain rules are NOT applied, for the same
+ * reason as on the MCP side: an action names no destination, so a rule could
+ * only be checked against a page the browser is already on. The rules bind
+ * navigate, and the act description says an action can lead off-list.
+ */
+export async function performAct(
+  proxy: HostedProxy,
+  sessionId: string,
+  args: { action: string },
+): Promise<PageActionResult> {
+  const text = await proxy('act', { action: args.action, sessionId });
   return { sessionId, result: safePayload(text) };
 }

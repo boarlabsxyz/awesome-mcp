@@ -158,6 +158,58 @@ describe('REST data plane: HubSpot and Redmine handler bodies', () => {
       assert.match(text.text, /Acme/);
     });
 
+    it('searches companies, contacts and deals with the tool arguments as the body', async () => {
+      for (const label of ['companies', 'contacts', 'deals']) {
+        reset();
+        when(`/objects/${label}/search`, { json: { total: 1, results: [{ id: 'x1', properties: { name: 'Acme', dealname: 'Q4' } }] } });
+        const res = await request(app).post(`/api/v1/hubspot/${label}/search`).set(auth())
+          .send({ query: 'acme', filters: [{ propertyName: 'domain', value: 'acme.com' }], limit: 5 });
+        assert.equal(res.status, 200, label);
+        assert.equal(res.body.results[0].id, 'x1');
+        const sent = lastCall().body as any;
+        assert.equal(sent.query, 'acme');
+        assert.equal(sent.limit, 5);
+        assert.deepEqual(sent.filterGroups, [{ filters: [{ propertyName: 'domain', operator: 'EQ', value: 'acme.com' }] }]);
+      }
+    });
+
+    it('renders a search as text, naming requested properties HubSpot did not return', async () => {
+      reset();
+      when('/objects/companies/search', { json: { total: 1, results: [{ id: 'c1', properties: { name: 'Acme' } }] } });
+      const res = await request(app).post('/api/v1/hubspot/companies/search?format=text').set(auth())
+        .send({ query: 'acme', properties: ['name', 'nope'] });
+      assert.equal(res.status, 200);
+      assert.match(res.headers['content-type'], /text\/plain/);
+      assert.match(res.text, /Acme/);
+    });
+
+    it('refuses a search with neither query nor filters, and an unknown key, before calling HubSpot', async () => {
+      reset();
+      const empty = await request(app).post('/api/v1/hubspot/deals/search').set(auth()).send({ limit: 3 });
+      assert.equal(empty.status, 400);
+      assert.match(empty.body.error, /query and\/or at least one filter/);
+      const unknown = await request(app).post('/api/v1/hubspot/deals/search').set(auth()).send({ q: 'x' });
+      assert.equal(unknown.status, 400);
+      assert.ok(unknown.body.issues);
+      assert.equal(calls.length, 0);
+    });
+
+    it('does not route "search" to the company update', async () => {
+      // POST /companies/:companyId is updateCompany; the search loop is
+      // registered first so "search" is never read as an id.
+      reset();
+      when('/objects/companies/search', { json: { results: [] } });
+      await request(app).post('/api/v1/hubspot/companies/search').set(auth()).send({ query: 'a' }).expect(200);
+      assert.ok(calls.every(c => c.method !== 'PATCH'));
+    });
+
+    it('keeps a HubSpot 400 on a search as 400', async () => {
+      reset();
+      when('/objects/companies/search', { status: 400, json: { message: 'bad filter' } });
+      const res = await request(app).post('/api/v1/hubspot/companies/search').set(auth()).send({ query: 'a' });
+      assert.equal(res.status, 400);
+    });
+
     it('clamps ?limit to HubSpot own search page cap', async () => {
       reset();
       when('/objects/companies/search', { json: { results: [] } });

@@ -13,11 +13,11 @@ import type { docs_v1, drive_v3 } from 'googleapis';
 import type { ZodTypeAny } from 'zod';
 
 import {
-  copyFileSchema, createFolderSchema, createFromTemplateSchema, moveFileSchema, renameFileSchema,
+  copyFileSchema, createDocumentSchema, createFolderSchema, createFromTemplateSchema, moveFileSchema, renameFileSchema,
   shareDriveFileSchema, trashFileRestSchema,
 } from './schemas.js';
 import {
-  performCopyFile, performCreateFolder, performCreateFromTemplate, performMoveFile, performRenameFile,
+  performCopyFile, performCreateDocument, performCreateFolder, performCreateFromTemplate, performMoveFile, performRenameFile,
   performShareDriveFile, performTrashFile,
 } from './toolHandlers.js';
 
@@ -62,6 +62,24 @@ export const DRIVE_WRITE_ROUTES: ReadonlyArray<DriveWriteRoute> = [
     params: () => ({}),
     run: async ({ googleDrive }, args) => ({ status: 200, body: await performCreateFolder(googleDrive, args) }),
     notFound: 'Parent folder not found', fallback: 'Failed to create folder',
+  },
+  {
+    path: '/api/v1/drive/documents', tool: 'createDocument', schema: createDocumentSchema,
+    params: () => ({}),
+    run: async ({ googleDrive, googleDocs }, args) => {
+      const { document, initialContent } = await performCreateDocument(googleDrive, () => googleDocs, args);
+      // 201 even when the content insert failed: the document exists either
+      // way. initialContentWritten is three-valued: null when none was sent.
+      return {
+        status: 201,
+        body: {
+          ...document,
+          initialContentWritten: initialContent ? initialContent.written : null,
+          ...(initialContent && !initialContent.written ? { initialContentError: initialContent.error } : {}),
+        },
+      };
+    },
+    notFound: 'Parent folder not found', fallback: 'Failed to create document',
   },
   {
     path: '/api/v1/drive/templates/:templateId/documents', tool: 'createFromTemplate', schema: createFromTemplateSchema,

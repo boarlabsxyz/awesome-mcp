@@ -51,6 +51,17 @@ function raceAbort<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
+export interface SlackFileFetchOptions {
+  maxBytes?: number;
+  /**
+   * The file itself is HTML (its files.info mimetype is text/html), so a
+   * text/html response is the file, not Slack's sign-in page. Only then is the
+   * sign-in check skipped; for every other file it is how a token without
+   * `files:read` shows up.
+   */
+  allowHtml?: boolean;
+}
+
 export interface SlackFileBytes {
   buffer: Buffer;
   contentType: string;
@@ -65,7 +76,7 @@ export interface SlackFileBytes {
 export async function fetchSlackFileBytes(
   url: string,
   token: string,
-  opts?: { maxBytes?: number },
+  opts?: SlackFileFetchOptions,
 ): Promise<SlackFileBytes> {
   const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
 
@@ -128,11 +139,14 @@ export async function fetchSlackFileBytes(
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
 
     // A token missing `files:read` gets 200 + an HTML sign-in page, not a 401.
-    if (contentType.startsWith('text/html')) {
+    // Tagged 403 (the REST route reads `.status`): the connection lacks a scope.
+    if (contentType.startsWith('text/html') && !opts?.allowHtml) {
       await response.body?.cancel().catch(() => { /* ignore */ });
-      throw new UserError(
+      const err = new UserError(
         'Slack returned a sign-in page instead of the file. The connected Slack token is missing the "files:read" scope — reconnect Slack from the dashboard to re-consent.',
       );
+      (err as UserError & { status: number }).status = 403;
+      throw err;
     }
 
     // Reject early if Content-Length advertises an oversize payload.

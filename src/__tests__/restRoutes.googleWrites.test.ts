@@ -398,6 +398,74 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
     });
   });
 
+  describe('REST coverage pass: Sheets tabs and fields, Calendar free/busy', () => {
+    it('refuses addSpreadsheetSheet with no title or a zero rowCount', async () => {
+      await expectInvalid('/api/v1/sheets/sheet-123/sheets', {}, 'sheetTitle');
+      await expectInvalid('/api/v1/sheets/sheet-123/sheets', { sheetTitle: 'T', rowCount: 0 }, 'rowCount');
+    });
+
+    it('refuses updateCellByFieldName with a missing field or a non-string value', async () => {
+      await expectInvalid('/api/v1/sheets/sheet-123/cells/update-by-field',
+        { searchColumn: 'A', searchValue: 'x', newValue: 'y' }, 'fieldName');
+      await expectInvalid('/api/v1/sheets/sheet-123/cells/update-by-field',
+        { searchColumn: 'A', searchValue: 'x', fieldName: 'f', newValue: 5 }, 'newValue');
+    });
+
+    it('refuses a free/busy window that ends before it starts, before calling Google', async () => {
+      const res = await request(app)
+        .get('/api/v1/calendars/freebusy?timeMin=2026-01-02T00:00:00Z&timeMax=2026-01-01T00:00:00Z').set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /must be after timeMin/);
+    });
+
+    it('refuses a repeated time parameter and an explicitly empty calendarIds, before defaulting', async () => {
+      for (const q of ['timeMin=2026-01-01T00:00:00Z&timeMin=2026-02-01T00:00:00Z', 'timeMax=a&timeMax=b', 'timeZone=UTC&timeZone=CET']) {
+        const res = await request(app).get(`/api/v1/calendars/freebusy?${q}`).set(auth());
+        assert.equal(res.status, 400, q);
+        assert.match(res.body.error, /exactly once/);
+      }
+      for (const q of ['calendarIds=,', 'calendarIds=', 'calendarIds=%20,%20']) {
+        const res = await request(app).get(`/api/v1/calendars/freebusy?${q}`).set(auth());
+        assert.equal(res.status, 400, q);
+        assert.match(res.body.error, /calendarIds is empty/);
+      }
+    });
+
+    it('refuses an explicitly empty time parameter instead of using the default window', async () => {
+      for (const q of ['timeMin=', 'timeMax=', 'timeZone=', 'timeMin=&calendarIds=primary']) {
+        const res = await request(app).get(`/api/v1/calendars/freebusy?${q}`).set(auth());
+        assert.equal(res.status, 400, q);
+        assert.match(res.body.error, /must not be empty/);
+      }
+    });
+
+    it('combines repeated and comma-separated calendarIds into one list, held to the 50-id limit', async () => {
+      // 26 repeated keys plus a 25-id CSV is 51 ids: refused as one list, which
+      // proves both encodings reach the same list rather than one being dropped.
+      const repeated = Array.from({ length: 26 }, (_, i) => `calendarIds=r${i}@x.test`).join('&');
+      const csv = Array.from({ length: 25 }, (_, i) => `c${i}@x.test`).join(',');
+      const res = await request(app).get(`/api/v1/calendars/freebusy?${repeated}&calendarIds=${csv}`).set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /Too many calendars \(51\)/);
+    });
+
+    it('refuses a searchColumn that is a cell reference on update-by-field, before calling Google', async () => {
+      const res = await request(app).post('/api/v1/sheets/sheet-123/cells/update-by-field').set(auth())
+        .send({ searchColumn: 'A2', searchValue: 'x', fieldName: 'f', newValue: 'y' });
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /column letters/);
+    });
+
+    it('refuses more than 50 calendars and an unparseable timeMin with 400', async () => {
+      const many = Array.from({ length: 51 }, (_, i) => `c${i}@x.test`).join(',');
+      const tooMany = await request(app).get(`/api/v1/calendars/freebusy?calendarIds=${many}`).set(auth());
+      assert.equal(tooMany.status, 400);
+      assert.match(tooMany.body.error, /at most 50/);
+      const badTime = await request(app).get('/api/v1/calendars/freebusy?timeMin=yesterday').set(auth());
+      assert.equal(badTime.status, 400);
+    });
+  });
+
   describe('Drive', () => {
     it('refuses a folder with no name, as the legacy route did', async () => {
       await expectInvalid('/api/v1/drive/folders', { parentFolderId: 'p1' }, 'name');
@@ -422,6 +490,17 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
     it('refuses a template with no title, and replacements that are not text', async () => {
       await expectInvalid('/api/v1/drive/templates/tpl-123/documents', {}, 'newTitle');
       await expectInvalid('/api/v1/drive/templates/tpl-123/documents', { newTitle: 'T', replacements: { a: 1 } }, 'replacements');
+    });
+
+    it('refuses a createDocument with no title, and initialContent that is not text', async () => {
+      await expectInvalid('/api/v1/drive/documents', { parentFolderId: 'p1' }, 'title');
+      await expectInvalid('/api/v1/drive/documents', { title: 'T', initialContent: ['a'] }, 'initialContent');
+    });
+
+    it('parses a createDocument initialContent past 100 kb instead of answering 413', async () => {
+      // /api/v1/drive/documents is in REST_LARGE_BODY_PREFIXES.
+      const res = await request(app).post('/api/v1/drive/documents').set(auth()).send({ title: '', initialContent: 'x'.repeat(300_000) });
+      assert.equal(res.status, 400, `expected validation, not 413; got ${res.status}`);
     });
 
     it('refuses a share with an unknown role, and a user share with no address', async () => {

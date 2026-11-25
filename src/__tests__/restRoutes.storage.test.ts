@@ -208,6 +208,36 @@ describe('REST data plane: Storage handlers', () => {
     assert.equal(replaced.body.updated, 1);
   });
 
+  it('creates a collection: 201 with its schema, under the caller user id', async () => {
+    const calls = fakePool([
+      [/AS collections/, [{ collections: 0, bytes: 0 }]],
+      [/INSERT INTO storage_collections/, [collectionRow]],
+    ]);
+    const res = await post('/api/v1/storage/collections', {
+      collection: 'people',
+      description: collectionRow.description,
+      fields: collectionRow.fields,
+      keyField: 'profileUrl',
+      ttlDays: 30,
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.created, 'people');
+    const insert = calls.find(c => /INSERT INTO storage_collections/.test(c.text));
+    assert.equal(insert?.params[0], userId);
+  });
+
+  it('refuses a create body the schema rejects, and a keyField that is not a field, with 400', async () => {
+    const calls = fakePool([]);
+    const bad = await post('/api/v1/storage/collections', { collection: 'people' });
+    assert.equal(bad.status, 400);
+    assert.ok(bad.body.issues);
+    const wrongKey = await post('/api/v1/storage/collections', {
+      collection: 'people', description: 'x', fields: collectionRow.fields, keyField: 'nope',
+    });
+    assert.equal(wrongKey.status, 400);
+    assert.equal(calls.length, 0, 'refused before touching the database');
+  });
+
   it('parses a bulk insert past 100 kb instead of answering 413', async () => {
     fakePool([]);
     const big = Array.from({ length: 400 }, (_, i) => ({ profileUrl: `https://l.in/${i}`, name: 'x'.repeat(400) }));

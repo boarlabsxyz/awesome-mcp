@@ -160,88 +160,121 @@ calendarServer.addTool({
 // Google's freebusy.query accepts at most 50 calendars per request.
 const FREEBUSY_MAX_CALENDARS = 50;
 
+export const queryFreeBusySchema = z.object({
+  calendarIds: z.array(z.string()).optional().default(['primary'])
+    .describe('Calendar IDs or email addresses to check (max 50). Use "primary" for the user\'s primary calendar.'),
+  timeMin: z.string().optional()
+    .describe('Start of the time range (ISO 8601 format, e.g., "2024-01-01T00:00:00Z"). Defaults to now.'),
+  timeMax: z.string().optional()
+    .describe('End of the time range (ISO 8601 format). Defaults to 7 days after timeMin.'),
+  timeZone: z.string().optional()
+    .describe('IANA time zone for the response (e.g., "Europe/Berlin"). Passed through to Google.'),
+});
+export type QueryFreeBusyArgs = z.infer<typeof queryFreeBusySchema>;
+
+export interface FreeBusyResult {
+  timeMin: string;
+  timeMax: string;
+  timeZone?: string;
+  /** In request order. `busy: null` is unknown (Google returned nothing, or could not read it), never free. */
+  calendars: Array<{ id: string; busy: Array<{ start?: string | null; end?: string | null }> | null; errors?: string[] }>;
+}
+
+/**
+ * Resolve the window, query Google, and report each calendar in request order.
+ *
+ * Shared by the queryFreeBusy tool and GET /api/v1/calendars/freebusy. The
+ * argument checks throw a UserError with no status (a 400 over REST); Google's
+ * own failure is rethrown untouched so its `code` reaches the route.
+ */
+export async function performQueryFreeBusy(calendar: calendar_v3.Calendar, args: QueryFreeBusyArgs): Promise<FreeBusyResult> {
+  const calendarIds = args.calendarIds;
+  if (calendarIds.length === 0) {
+    throw new UserError('calendarIds must contain at least one calendar ID.');
+  }
+  if (calendarIds.length > FREEBUSY_MAX_CALENDARS) {
+    throw new UserError(`Too many calendars (${calendarIds.length}): Google accepts at most ${FREEBUSY_MAX_CALENDARS} per query.`);
+  }
+
+  const timeMin = args.timeMin || new Date().toISOString();
+  const minMs = Date.parse(timeMin);
+  if (Number.isNaN(minMs)) {
+    throw new UserError(`timeMin is not a valid ISO 8601 date-time: ${timeMin}`);
+  }
+  const timeMax = args.timeMax || new Date(minMs + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const maxMs = Date.parse(timeMax);
+  if (Number.isNaN(maxMs)) {
+    throw new UserError(`timeMax is not a valid ISO 8601 date-time: ${timeMax}`);
+  }
+  if (maxMs <= minMs) {
+    throw new UserError(`timeMax (${timeMax}) must be after timeMin (${timeMin}).`);
+  }
+
+  const response = await calendar.freebusy.query({
+    requestBody: {
+      timeMin,
+      timeMax,
+      ...(args.timeZone ? { timeZone: args.timeZone } : {}),
+      items: calendarIds.map(id => ({ id })),
+    },
+  });
+
+  const returned = response.data.calendars || {};
+  return {
+    timeMin,
+    timeMax,
+    ...(args.timeZone ? { timeZone: args.timeZone } : {}),
+    // Request order, not response order. A calendar Google could not read — or
+    // did not return at all — is unknown, never free.
+    calendars: calendarIds.map((id) => {
+      const entry = returned[id];
+      if (!entry) return { id, busy: null, errors: ['notReturned'] };
+      if (entry.errors && entry.errors.length > 0) {
+        return { id, busy: null, errors: entry.errors.map(e => e.reason || 'unknown error') };
+      }
+      return { id, busy: (entry.busy || []).map(b => ({ start: b.start, end: b.end })) };
+    }),
+  };
+}
+
 calendarServer.addTool({
   name: 'queryFreeBusy',
   annotations: { readOnlyHint: true },
   description: 'Returns busy intervals for one or more calendars (or people\'s email addresses) in a time range, for finding a free slot. Use listEvents for event details.',
-  parameters: z.object({
-    calendarIds: z.array(z.string()).optional().default(['primary'])
-      .describe('Calendar IDs or email addresses to check (max 50). Use "primary" for the user\'s primary calendar.'),
-    timeMin: z.string().optional()
-      .describe('Start of the time range (ISO 8601 format, e.g., "2024-01-01T00:00:00Z"). Defaults to now.'),
-    timeMax: z.string().optional()
-      .describe('End of the time range (ISO 8601 format). Defaults to 7 days after timeMin.'),
-    timeZone: z.string().optional()
-      .describe('IANA time zone for the response (e.g., "Europe/Berlin"). Passed through to Google.'),
-  }),
+  parameters: queryFreeBusySchema,
   execute: async (args, { log, session }) => {
-    const calendarIds = args.calendarIds;
-    if (calendarIds.length === 0) {
-      throw new UserError('calendarIds must contain at least one calendar ID.');
-    }
-    if (calendarIds.length > FREEBUSY_MAX_CALENDARS) {
-      throw new UserError(`Too many calendars (${calendarIds.length}): Google accepts at most ${FREEBUSY_MAX_CALENDARS} per query.`);
-    }
-
-    const timeMin = args.timeMin || new Date().toISOString();
-    const minMs = Date.parse(timeMin);
-    if (Number.isNaN(minMs)) {
-      throw new UserError(`timeMin is not a valid ISO 8601 date-time: ${timeMin}`);
-    }
-    const timeMax = args.timeMax || new Date(minMs + 7 * 24 * 60 * 60 * 1000).toISOString();
-    const maxMs = Date.parse(timeMax);
-    if (Number.isNaN(maxMs)) {
-      throw new UserError(`timeMax is not a valid ISO 8601 date-time: ${timeMax}`);
-    }
-    if (maxMs <= minMs) {
-      throw new UserError(`timeMax (${timeMax}) must be after timeMin (${timeMin}).`);
-    }
-
     const calendar = getCalendarClient(session);
-    log.info(`Querying free/busy for ${calendarIds.length} calendar(s): ${calendarIds.join(', ')}`);
+    log.info(`Querying free/busy for ${args.calendarIds.length} calendar(s): ${args.calendarIds.join(', ')}`);
 
+    let r: FreeBusyResult;
     try {
-      const response = await calendar.freebusy.query({
-        requestBody: {
-          timeMin,
-          timeMax,
-          ...(args.timeZone ? { timeZone: args.timeZone } : {}),
-          items: calendarIds.map(id => ({ id })),
-        },
-      });
-
-      const calendars = response.data.calendars || {};
-      let result = `Free/busy from ${timeMin} → ${timeMax}`;
-      if (args.timeZone) result += ` (time zone: ${args.timeZone})`;
-      result += '\n\n';
-
-      // Request order, not response order. A calendar Google could not read —
-      // or did not return at all — is unknown, never free.
-      for (const id of calendarIds) {
-        result += `**${id}**\n`;
-        const entry = calendars[id];
-        const busy = entry?.busy || [];
-        if (!entry) {
-          result += '   Unknown: Google returned no free/busy data for this calendar\n';
-        } else if (entry.errors && entry.errors.length > 0) {
-          const reasons = entry.errors.map(e => e.reason || 'unknown error').join(', ');
-          result += `   Unknown: Google could not read this calendar (${reasons})\n`;
-        } else if (busy.length === 0) {
-          result += '   Free for the whole range\n';
-        }
-        for (const b of busy) {
-          result += `   ${b.start} – ${b.end}\n`;
-        }
-        result += '\n';
-      }
-
-      return result;
+      r = await performQueryFreeBusy(calendar, args);
     } catch (error: any) {
+      if (error instanceof UserError) throw error;
       log.error(`Error querying free/busy: ${error.message || error}`);
-      if (error.code === 404) throw new UserError(`Calendar not found (IDs: ${calendarIds.join(', ')}).`);
+      if (error.code === 404) throw new UserError(`Calendar not found (IDs: ${args.calendarIds.join(', ')}).`);
       if (error.code === 403) throw new UserError("Permission denied for one or more of these calendars.");
       throw new UserError(`Failed to query free/busy: ${error.message || 'Unknown error'}`);
     }
+
+    let result = `Free/busy from ${r.timeMin} → ${r.timeMax}`;
+    if (r.timeZone) result += ` (time zone: ${r.timeZone})`;
+    result += '\n\n';
+    for (const c of r.calendars) {
+      result += `**${c.id}**\n`;
+      if (c.busy === null) {
+        result += c.errors?.[0] === 'notReturned'
+          ? '   Unknown: Google returned no free/busy data for this calendar\n'
+          : `   Unknown: Google could not read this calendar (${(c.errors ?? []).join(', ')})\n`;
+      } else if (c.busy.length === 0) {
+        result += '   Free for the whole range\n';
+      }
+      for (const b of c.busy ?? []) {
+        result += `   ${b.start} – ${b.end}\n`;
+      }
+      result += '\n';
+    }
+    return result;
   },
 });
 

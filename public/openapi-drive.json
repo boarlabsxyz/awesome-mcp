@@ -17,6 +17,115 @@
     }
   ],
   "paths": {
+    "/api/v1/drive/documents": {
+      "post": {
+        "operationId": "createDriveDocument",
+        "summary": "Create a Google Doc, optionally with initial text",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Not idempotent: each call creates another document. Works with shared drives. Answers 201 even when the text insert failed, because the document exists by then: initialContentWritten is false with initialContentError, and null when no text was sent. Body limit 5mb.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title for the new document."
+                  },
+                  "parentFolderId": {
+                    "type": "string",
+                    "description": "ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive."
+                  },
+                  "initialContent": {
+                    "type": "string",
+                    "description": "Initial text content to add to the document."
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "webViewLink": {
+                      "type": "string"
+                    },
+                    "driveId": {
+                      "type": "string"
+                    },
+                    "initialContentWritten": {
+                      "type": "boolean",
+                      "nullable": true
+                    },
+                    "initialContentError": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Parent folder not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/drive/files/{fileId}": {
       "get": {
         "operationId": "getFileInfo",

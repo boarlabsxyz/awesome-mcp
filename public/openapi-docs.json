@@ -17,6 +17,88 @@
     }
   ],
   "paths": {
+    "/api/v1/docs/{documentId}/structure": {
+      "get": {
+        "operationId": "inspectDocStructure",
+        "summary": "Inspect the structure of a Google Doc",
+        "description": "Paragraph, table and section counts, and header and footer presence, for one tab (the first unless tabId is given), plus the tab hierarchy. Mirrors the MCP tool `inspectDocStructure`. Returns JSON.",
+        "tags": [
+          "docs"
+        ],
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Doc ID."
+          },
+          {
+            "name": "detailed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Pass true for an element-by-element listing; anything else is the summary."
+          },
+          {
+            "name": "tabId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The tab to inspect. Defaults to the first tab, so the counts of a multi-tab document cover that tab only; the tab hierarchy always lists every tab."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The structure summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/docs/read": {
       "post": {
         "operationId": "readGoogleDoc",

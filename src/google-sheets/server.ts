@@ -58,6 +58,113 @@ export const writeSpreadsheetSchema = z.object({
     .describe('How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user.'),
 });
 
+export const addSpreadsheetSheetSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  sheetTitle: z.string().min(1).describe('Title for the new sheet/tab.'),
+  rowCount: z.number().int().min(1).optional().describe('Rows in the new tab (Google default: 1000). Set this to at least the number of rows you are about to write.'),
+  columnCount: z.number().int().min(1).optional().describe('Columns in the new tab (Google default: 26, i.e. A-Z).'),
+});
+
+/**
+ * Add a tab and return the properties Google reports for it (id, title, and the
+ * grid it actually made). Google answering with no properties is a 502, not a
+ * success: the caller would have no sheetId to target.
+ */
+export async function performAddSpreadsheetSheet(
+  sheets: sheets_v4.Sheets,
+  args: z.infer<typeof addSpreadsheetSheetSchema>,
+): Promise<sheets_v4.Schema$SheetProperties> {
+  const response = await SheetsHelpers.addSheet(sheets, args.spreadsheetId, args.sheetTitle, {
+    rowCount: args.rowCount,
+    columnCount: args.columnCount,
+  });
+  const added = response.replies?.[0]?.addSheet?.properties;
+  if (!added) {
+    const err: any = new UserError('Failed to add sheet - no sheet properties returned.');
+    err.code = 502;
+    throw err;
+  }
+  return added;
+}
+
+export const updateCellByFieldNameSchema = z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
+  searchColumn: z.string().describe('Column letters to search in (e.g., "A" or "AA"); a cell reference such as "A2" is refused.'),
+  searchValue: z.string().describe('The value to search for (exact match) to locate the row.'),
+  fieldName: z.string().describe('The header name of the column to update.'),
+  newValue: z.string().describe('The new value to write into the cell.'),
+  sheetName: z.string().optional().describe('Sheet/tab name. Defaults to the first sheet.'),
+});
+
+export type UpdateCellByFieldNameResult =
+  | { success: false; reason: 'valueNotFound'; error: string }
+  | { success: false; reason: 'fieldNotFound'; error: string; availableHeaders: string[] }
+  | {
+    success: true;
+    updated: { row: number; column: string; cell: string };
+    rowContext: Record<string, any>;
+    field: string;
+    oldValue: string | null;
+    newValue: string;
+    /** Google's count of cells the write changed: 1 confirms it, anything else does not. */
+    updatedCells: number | null;
+  };
+
+/**
+ * Locate a row by a column value and write one field of it, named by header.
+ * Shared by the tool and POST /api/v1/sheets/{id}/cells/update-by-field. A
+ * missing value or header is a result, not a throw, so the tool keeps its JSON
+ * answer and the route chooses 404 / 400.
+ */
+export async function performUpdateCellByFieldName(
+  sheets: sheets_v4.Sheets,
+  args: z.infer<typeof updateCellByFieldNameSchema>,
+): Promise<UpdateCellByFieldNameResult> {
+  SheetsHelpers.assertColumnLetters(args.searchColumn);
+  // The lookup starts at row 2: row 1 holds the headers, and a searchValue
+  // equal to a header must not turn this into a write over the header row.
+  const [rowNumber, headers] = await Promise.all([
+    SheetsHelpers.findRowByValue(sheets, args.spreadsheetId, args.searchColumn, args.searchValue, args.sheetName, 2),
+    SheetsHelpers.getHeaders(sheets, args.spreadsheetId, args.sheetName),
+  ]);
+
+  if (rowNumber === null) {
+    return { success: false, reason: 'valueNotFound', error: `Value "${args.searchValue}" not found in column ${args.searchColumn} below the header row.` };
+  }
+
+  const colIndex = headers.indexOf(args.fieldName);
+  if (colIndex === -1) {
+    return { success: false, reason: 'fieldNotFound', error: `Field "${args.fieldName}" not found in headers.`, availableHeaders: headers };
+  }
+
+  // Read the current row so we can return context for sanity-checking
+  const rowData = await SheetsHelpers.getRowValues(sheets, args.spreadsheetId, rowNumber, args.sheetName);
+
+  const colLetter = SheetsHelpers.columnIndexToLetter(colIndex);
+  // The same sheetRangePrefix the lookup, header and row reads use.
+  const cellRef = `${SheetsHelpers.sheetRangePrefix(args.sheetName)}${colLetter}${rowNumber}`;
+
+  const oldValue = rowData[colIndex] !== undefined ? String(rowData[colIndex]) : null;
+
+  const written = await SheetsHelpers.writeRange(sheets, args.spreadsheetId, cellRef, [[args.newValue]]);
+
+  // Build a context object from the row so the AI can verify it updated the right record
+  const rowContext: Record<string, any> = {};
+  headers.forEach((header, i) => {
+    if (i < rowData.length) rowContext[header] = rowData[i];
+  });
+
+  return {
+    success: true,
+    updated: { row: rowNumber, column: colLetter, cell: `${colLetter}${rowNumber}` },
+    rowContext,
+    field: args.fieldName,
+    oldValue,
+    newValue: args.newValue,
+    updatedCells: written?.updatedCells ?? null,
+  };
+}
+
 export const appendSpreadsheetRowsSchema = z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
   range: z.string().describe('A1 notation range indicating where to append (e.g., "A1" or "Sheet1!A1"). Data will be appended starting from this range.'),
@@ -513,27 +620,13 @@ sheetsServer.addTool({
   name: 'addSpreadsheetSheet',
   annotations: { readOnlyHint: false },
   description: 'Adds a new sheet/tab to an existing Google Spreadsheet. Google sizes a new tab at 1000 rows x 26 columns, and writeSpreadsheet does NOT grow a grid — pass rowCount/columnCount when the data is bigger, or the write fails with "exceeds grid limits".',
-  parameters: z.object({
-    spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    sheetTitle: z.string().min(1).describe('Title for the new sheet/tab.'),
-    rowCount: z.number().int().min(1).optional().describe('Rows in the new tab (Google default: 1000). Set this to at least the number of rows you are about to write.'),
-    columnCount: z.number().int().min(1).optional().describe('Columns in the new tab (Google default: 26, i.e. A-Z).'),
-  }),
+  parameters: addSpreadsheetSheetSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`Adding sheet "${args.sheetTitle}" to spreadsheet ${args.spreadsheetId}`);
 
     try {
-      const response = await SheetsHelpers.addSheet(sheets, args.spreadsheetId, args.sheetTitle, {
-        rowCount: args.rowCount,
-        columnCount: args.columnCount,
-      });
-      const addedSheet = response.replies?.[0]?.addSheet?.properties;
-
-      if (!addedSheet) {
-        throw new UserError('Failed to add sheet - no sheet properties returned.');
-      }
-
+      const addedSheet = await performAddSpreadsheetSheet(sheets, args);
       // The grid comes from Google's reply, not from the request: a rowCount it
       // clamped or ignored must not be reported back as the size that was
       // created, since the next writeSpreadsheet depends on it.
@@ -615,12 +708,13 @@ sheetsServer.addTool({
   description: 'Search a column for a specific value and return the 1-based row number where it was found.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    searchColumn: z.string().describe('Column letter to search in (e.g., "A", "B", "AA").'),
+    searchColumn: z.string().describe('Column letters to search in (e.g., "A", "B", "AA"); a cell reference such as "A2" is refused.'),
     searchValue: z.string().describe('The value to search for (exact match).'),
     sheetName: z.string().optional().describe('Sheet/tab name. Defaults to the first sheet.'),
   }),
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
+    SheetsHelpers.assertColumnLetters(args.searchColumn);
     log.info(`Finding row with "${args.searchValue}" in column ${args.searchColumn}`);
 
     const rowNumber = await SheetsHelpers.findRowByValue(
@@ -640,12 +734,13 @@ sheetsServer.addTool({
   description: 'Look up a row by searching a column for a value, then return the row as a named JSON object using header names from row 1.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    searchColumn: z.string().describe('Column letter to search in (e.g., "A").'),
+    searchColumn: z.string().describe('Column letters to search in (e.g., "A" or "AA"); a cell reference such as "A2" is refused.'),
     searchValue: z.string().describe('The value to search for (exact match).'),
     sheetName: z.string().optional().describe('Sheet/tab name. Defaults to the first sheet.'),
   }),
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
+    SheetsHelpers.assertColumnLetters(args.searchColumn);
     log.info(`Reading row where column ${args.searchColumn} = "${args.searchValue}"`);
 
     const rowNumber = await SheetsHelpers.findRowByValue(
@@ -674,58 +769,19 @@ sheetsServer.addTool({
   name: 'updateCellByFieldName',
   annotations: { readOnlyHint: false },
   description: 'Find a row by searching a column for a value, then update a specific field (identified by header name) in that row. Assumes row 1 contains the header names.',
-  parameters: z.object({
-    spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    searchColumn: z.string().describe('Column letter to search in (e.g., "A").'),
-    searchValue: z.string().describe('The value to search for (exact match) to locate the row.'),
-    fieldName: z.string().describe('The header name of the column to update.'),
-    newValue: z.string().describe('The new value to write into the cell.'),
-    sheetName: z.string().optional().describe('Sheet/tab name. Defaults to the first sheet.'),
-  }),
+  parameters: updateCellByFieldNameSchema,
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
     log.info(`Updating "${args.fieldName}" where column ${args.searchColumn} = "${args.searchValue}"`);
-
-    const [rowNumber, headers] = await Promise.all([
-      SheetsHelpers.findRowByValue(sheets, args.spreadsheetId, args.searchColumn, args.searchValue, args.sheetName),
-      SheetsHelpers.getHeaders(sheets, args.spreadsheetId, args.sheetName),
-    ]);
-
-    if (rowNumber === null) {
-      return JSON.stringify({ success: false, error: `Value "${args.searchValue}" not found in column ${args.searchColumn}.` });
+    const r = await performUpdateCellByFieldName(sheets, args);
+    // The tool's JSON predates `reason` and `updatedCells`; both stay REST-only.
+    const out: Record<string, unknown> = { ...r };
+    if (!r.success) {
+      delete out.reason;
+      return JSON.stringify(out);
     }
-
-    const colIndex = headers.indexOf(args.fieldName);
-    if (colIndex === -1) {
-      return JSON.stringify({ success: false, error: `Field "${args.fieldName}" not found in headers.`, availableHeaders: headers });
-    }
-
-    // Read the current row so we can return context for sanity-checking
-    const rowData = await SheetsHelpers.getRowValues(sheets, args.spreadsheetId, rowNumber, args.sheetName);
-
-    const colLetter = SheetsHelpers.columnIndexToLetter(colIndex);
-    const cellRef = args.sheetName
-      ? `${args.sheetName}!${colLetter}${rowNumber}`
-      : `${colLetter}${rowNumber}`;
-
-    const oldValue = rowData[colIndex] !== undefined ? String(rowData[colIndex]) : null;
-
-    await SheetsHelpers.writeRange(sheets, args.spreadsheetId, cellRef, [[args.newValue]]);
-
-    // Build a context object from the row so the AI can verify it updated the right record
-    const rowContext: Record<string, any> = {};
-    headers.forEach((header, i) => {
-      if (i < rowData.length) rowContext[header] = rowData[i];
-    });
-
-    return JSON.stringify({
-      success: true,
-      updated: { row: rowNumber, column: colLetter, cell: `${colLetter}${rowNumber}` },
-      rowContext,
-      field: args.fieldName,
-      oldValue,
-      newValue: args.newValue,
-    }, null, 2);
+    delete out.updatedCells;
+    return JSON.stringify(out, null, 2);
   }
 });
 

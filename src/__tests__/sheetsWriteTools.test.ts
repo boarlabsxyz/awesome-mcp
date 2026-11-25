@@ -26,6 +26,8 @@ const {
   batchUpdateSpreadsheetSchema,
   performCreateSpreadsheet,
   performBatchUpdateSpreadsheet,
+  performAddSpreadsheetSheet,
+  performUpdateCellByFieldName,
 } = sheetsModule as any;
 
 const SheetsHelpers = await import('../google-sheets/apiHelpers.js');
@@ -522,6 +524,143 @@ describe('grid growth operations', () => {
     assert.equal(sheets.spreadsheets.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0].addSheet.properties.gridProperties, undefined);
     assert.doesNotMatch(out, /Grid:/);
   });
+
+  it('performAddSpreadsheetSheet returns the reply properties, and a reply without them is a 502', async () => {
+    const ok = mkSheets({
+      spreadsheets: { batchUpdate: mock.fn(async () => ({ data: { replies: [{ addSheet: { properties: { title: 'T', sheetId: 4 } } }] } })) },
+    });
+    assert.deepEqual(await performAddSpreadsheetSheet(ok, { spreadsheetId: 'ss-1', sheetTitle: 'T' }), { title: 'T', sheetId: 4 });
+    const empty = mkSheets({ spreadsheets: { batchUpdate: mock.fn(async () => ({ data: { replies: [{}] } })) } });
+    await assert.rejects(performAddSpreadsheetSheet(empty, { spreadsheetId: 'ss-1', sheetTitle: 'T' }), (err: any) => err.code === 502);
+    // The tool keeps its old message for that case.
+    await assert.rejects(callTool('addSpreadsheetSheet', { spreadsheetId: 'ss-1', sheetTitle: 'T' }, { googleSheets: empty }), /no sheet properties returned/);
+  });
+
+  it('addSpreadsheetSheet keeps Google 400 (duplicate name) on .code for the REST route', async () => {
+    const dup = mkSheets({ spreadsheets: { batchUpdate: mock.fn(async () => { throw mkErr(400, 'A sheet with the name "T" already exists.'); }) } });
+    await assert.rejects(performAddSpreadsheetSheet(dup, { spreadsheetId: 'ss-1', sheetTitle: 'T' }), (err: any) => err.code === 400);
+    await assert.rejects(callTool('addSpreadsheetSheet', { spreadsheetId: 'ss-1', sheetTitle: 'T' }, { googleSheets: dup }), /already exists/);
+  });
+});
+
+describe('updateCellByFieldName', () => {
+  /** A sheet whose column A holds ids and row 1 the headers. */
+  function grid(
+    update: any = mock.fn(async () => ({ data: { updatedCells: 1 } })),
+    rows: string[][] = [['id', 'name', 'status'], ['a1', 'Ada', 'new'], ['b2', 'Bob', 'new']],
+  ): any {
+    return mkSheets({
+      values: {
+        get: mock.fn(async ({ range }: any) => {
+          // A column read, A:A or A2:A: the values from that row down, like Google.
+          const col = /(?:^|!)[A-Z]+(\d*):[A-Z]+$/i.exec(range);
+          if (col) return { data: { values: rows.slice(Number(col[1] || 1) - 1).map(r => [r[0]]) } };
+          if (/1:1$/.test(range)) return { data: { values: [rows[0]] } };
+          const n = Number(String(range).split('!').pop()!.split(':')[0]);
+          return { data: { values: [rows[n - 1]] } };
+        }),
+        update,
+      },
+    });
+  }
+  const args = { spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'b2', fieldName: 'status', newValue: 'done' };
+
+  it('writes the named field of the matched row and reports the old value and updatedCells', async () => {
+    const update = mock.fn(async () => ({ data: { updatedCells: 1 } }));
+    const r: any = await performUpdateCellByFieldName(grid(update), args);
+    assert.equal(r.success, true);
+    assert.deepEqual(r.updated, { row: 3, column: 'C', cell: 'C3' });
+    assert.equal(r.oldValue, 'new');
+    assert.equal(r.updatedCells, 1);
+    assert.equal((update.mock.calls[0] as any).arguments[0].range, 'C3');
+    assert.deepEqual(r.rowContext, { id: 'b2', name: 'Bob', status: 'new' });
+  });
+
+  it('prefixes the sheet name, and reports updatedCells null when Google says nothing', async () => {
+    const update = mock.fn(async () => ({ data: {} }));
+    const r: any = await performUpdateCellByFieldName(grid(update), { ...args, sheetName: 'Data' });
+    assert.equal((update.mock.calls[0] as any).arguments[0].range, "'Data'!C3");
+    assert.equal(r.updatedCells, null);
+  });
+
+  it('refuses a searchColumn that is a cell reference, before any read or write', async () => {
+    const sheets = grid();
+    await assert.rejects(
+      performUpdateCellByFieldName(sheets, { ...args, searchColumn: 'A2' }),
+      (err: any) => err instanceof UserError && /column letters/.test(err.message) && (err as any).code === undefined,
+    );
+    assert.equal(sheets.spreadsheets.values.get.mock.calls.length, 0);
+    assert.equal(sheets.spreadsheets.values.update.mock.calls.length, 0);
+  });
+
+  it('accepts single and multi-letter columns', async () => {
+    for (const searchColumn of ['A', 'aa', 'AA']) {
+      const sheets = grid();
+      const r: any = await performUpdateCellByFieldName(sheets, { ...args, searchColumn });
+      assert.equal(r.success, true, searchColumn);
+      assert.equal(sheets.spreadsheets.values.get.mock.calls[0].arguments[0].range, `${searchColumn}2:${searchColumn}`);
+    }
+  });
+
+  it('quotes the sheet name in every range it builds: lookup, headers, row and write', async () => {
+    for (const [sheetName, quoted] of [['Q3 Plan', "'Q3 Plan'"], ["Bob's Sheet", "'Bob''s Sheet'"]]) {
+      const sheets = grid();
+      await performUpdateCellByFieldName(sheets, { ...args, sheetName });
+      const reads = sheets.spreadsheets.values.get.mock.calls.map((c: any) => c.arguments[0].range).sort();
+      assert.deepEqual(reads, [`${quoted}!1:1`, `${quoted}!3:3`, `${quoted}!A2:A`].sort());
+      assert.equal(sheets.spreadsheets.values.update.mock.calls[0].arguments[0].range, `${quoted}!C3`);
+    }
+  });
+
+  it('never matches the header row: a searchValue equal to a header is "no matching row", with no write', async () => {
+    const update = mock.fn(async () => ({ data: { updatedCells: 1 } }));
+    const rows = [['Name', 'Status'], ['Ada', 'new']];
+    const r: any = await performUpdateCellByFieldName(grid(update, rows), {
+      spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'Name', fieldName: 'Status', newValue: 'x',
+    });
+    assert.equal(r.success, false);
+    assert.equal(r.reason, 'valueNotFound');
+    assert.match(r.error, /below the header row/);
+    assert.equal(update.mock.calls.length, 0);
+    // A data row still matches, at its absolute row number.
+    const hit: any = await performUpdateCellByFieldName(grid(update, rows), {
+      spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'Ada', fieldName: 'Status', newValue: 'done',
+    });
+    assert.deepEqual(hit.updated, { row: 2, column: 'B', cell: 'B2' });
+  });
+
+  it('the read tools findRowByValue and readRowByField refuse a cell reference too, and keep matching from row 1', async () => {
+    for (const name of ['findRowByValue', 'readRowByField']) {
+      const sheets = grid();
+      await assert.rejects(
+        callTool(name, { spreadsheetId: 'ss-1', searchColumn: 'A2', searchValue: 'b2' }, { googleSheets: sheets }),
+        (err: any) => err instanceof UserError && /column letters/.test(err.message),
+      );
+      assert.equal(sheets.spreadsheets.values.get.mock.calls.length, 0, name);
+    }
+    // Read-only search is unchanged: it still scans the whole column, header row included.
+    const found = await callTool('findRowByValue', { spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'id' }, { googleSheets: grid() });
+    assert.equal(found, 'Found "id" in row 1.');
+    const row = await callTool('readRowByField', { spreadsheetId: 'ss-1', searchColumn: 'AA', searchValue: 'b2' }, { googleSheets: grid() });
+    assert.match(String(row), /Bob/);
+  });
+
+  it('returns a reason, writing nothing, for a missing value or header', async () => {
+    const update = mock.fn(async () => ({ data: {} }));
+    const noRow: any = await performUpdateCellByFieldName(grid(update), { ...args, searchValue: 'zz' });
+    assert.equal(noRow.reason, 'valueNotFound');
+    const noField: any = await performUpdateCellByFieldName(grid(update), { ...args, fieldName: 'owner' });
+    assert.equal(noField.reason, 'fieldNotFound');
+    assert.deepEqual(noField.availableHeaders, ['id', 'name', 'status']);
+    assert.equal(update.mock.calls.length, 0);
+  });
+
+  it('keeps the tool JSON unchanged: no reason on a miss, no updatedCells on success', async () => {
+    const miss = JSON.parse(await callTool('updateCellByFieldName', { ...args, searchValue: 'zz' }, { googleSheets: grid() }));
+    assert.deepEqual(Object.keys(miss), ['success', 'error']);
+    const hit = JSON.parse(await callTool('updateCellByFieldName', args, { googleSheets: grid() }));
+    assert.deepEqual(Object.keys(hit), ['success', 'updated', 'rowContext', 'field', 'oldValue', 'newValue']);
+  });
 });
 
 describe('a write that runs off the end of the grid says how to make room', () => {
@@ -775,5 +914,14 @@ describe('review follow-ups', () => {
       () => callTool('deleteSpreadsheetRowsOrColumns', { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 2, endIndex: 10 }, { googleSheets: sheets }),
       (err: any) => err instanceof UserError && /^Nothing was deleted: You can't delete all the rows/.test(err.message),
     );
+  });
+});
+
+describe('sheet range builders', () => {
+  it('quote a tab name with spaces or apostrophes, and leave the first-tab default bare', () => {
+    assert.equal(SheetsHelpers.sheetRangePrefix(undefined), '');
+    assert.equal(SheetsHelpers.columnSearchRange('A', 1, 10000, 'Q3 Plan'), "'Q3 Plan'!A1:A10000");
+    assert.equal(SheetsHelpers.columnSearchRange('B', 5, 9, "Bob's Sheet"), "'Bob''s Sheet'!B5:B9");
+    assert.equal(SheetsHelpers.columnSearchRange('C', 1, 3), 'C1:C3');
   });
 });
