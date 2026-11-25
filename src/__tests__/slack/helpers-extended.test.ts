@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import sharp from 'sharp';
-import { resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, resolveMessageBody, performPostMessage, performEditMessage, projectWriteOutcome } from '../../slack/helpers.js';
+import { performDownloadFileBytes, resolveUsers, getWorkspaceUrl, handleReadChannelHistory, handleReadThreadReplies, handleDownloadFile, handlePostMessage, handleReplyInThread, handleEditMessage, handleSearchMessages, handleSearchFiles, resolveMessageBody, performPostMessage, performEditMessage, projectWriteOutcome } from '../../slack/helpers.js';
 import { __setImageBlobPoolForTests } from '../../images/imageBlobStore.js';
 
 /** What the last chatPostMessage call was handed as its options argument. */
@@ -760,6 +760,27 @@ describe('handleDownloadFile', () => {
     assert.ok((result as string).includes('log.txt'));
   });
 
+  it('returns an HTML file as text, letting only that file through the sign-in check', async () => {
+    const opts: any[] = [];
+    const client = {
+      filesInfo: async () => ({ file: { ...IMAGE, name: 'page.html', mimetype: 'text/html' } }),
+      downloadFileBytes: async (_url: string, o: any) => { opts.push(o); return { buffer: Buffer.from('<h1>Hi</h1>'), contentType: 'text/html' }; },
+    } as any;
+    const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
+    assert.ok((result as string).includes('<h1>Hi</h1>'));
+    assert.equal(opts[0].allowHtml, true);
+
+    // A plain-text file keeps the check (allowHtml false) and the same output.
+    const plainOpts: any[] = [];
+    const plain = {
+      filesInfo: async () => ({ file: { ...IMAGE, name: 'log.txt', mimetype: 'text/plain' } }),
+      downloadFileBytes: async (_url: string, o: any) => { plainOpts.push(o); return { buffer: Buffer.from('x'), contentType: 'text/plain' }; },
+    } as any;
+    const text = await handleDownloadFile(plain, { fileId: 'F1', channelId: 'C1', format: 'url' });
+    assert.equal(plainOpts[0].allowHtml, false);
+    assert.ok((text as string).endsWith('```\nx\n```'));
+  });
+
   it('returns metadata rather than throwing for an unsupported type', async () => {
     const client = fileClient({ ...IMAGE, name: 'report.pdf', mimetype: 'application/pdf' });
     const result = await handleDownloadFile(client, { fileId: 'F1', channelId: 'C1', format: 'url' });
@@ -1121,5 +1142,61 @@ describe('write ops and their REST projection', () => {
       // An error nobody rewrote keeps no status, so the mapper reads its code.
       assert.equal(await statusOf(() => performPostMessage(failing('channel_not_found'), 'C1', 'x')), undefined);
     });
+  });
+});
+
+describe('performDownloadFileBytes (REST download)', () => {
+  const file = { id: 'F1', name: 'report.pdf', mimetype: 'application/pdf', channels: ['C1'], url_private_download: 'https://files.slack.com/f/report.pdf' };
+  const client = (f: any, download: (url: string) => Promise<any>) => ({
+    filesInfo: async () => ({ file: f }),
+    downloadFileBytes: download,
+  }) as any;
+
+  it('returns the bytes of any type, with the file mimetype, after the share check', async () => {
+    let fetched = '';
+    const r = await performDownloadFileBytes(client(file, async (url) => {
+      fetched = url;
+      return { buffer: Buffer.from('%PDF'), contentType: 'application/octet-stream' };
+    }), { fileId: 'F1', channelId: 'C1' });
+    assert.equal(fetched, file.url_private_download);
+    assert.equal(r.buffer.toString(), '%PDF');
+    assert.equal(r.contentType, 'application/pdf');
+  });
+
+  it('falls back to the response type, then octet-stream, when Slack names no mimetype', async () => {
+    const bare = { ...file, mimetype: undefined };
+    const typed = await performDownloadFileBytes(client(bare, async () => ({ buffer: Buffer.from('x'), contentType: 'text/csv' })), { fileId: 'F1', channelId: 'C1' });
+    assert.equal(typed.contentType, 'text/csv');
+    const untyped = await performDownloadFileBytes(client(bare, async () => ({ buffer: Buffer.from('x'), contentType: '' })), { fileId: 'F1', channelId: 'C1' });
+    assert.equal(untyped.contentType, 'application/octet-stream');
+  });
+
+  it('turns the size cap into a 422 refusal and passes other failures through', async () => {
+    await assert.rejects(
+      performDownloadFileBytes(client(file, async () => { throw new Error('Slack file exceeds the maximum size (20 bytes).'); }), { fileId: 'F1', channelId: 'C1' }),
+      (err: any) => err.status === 422,
+    );
+    await assert.rejects(
+      performDownloadFileBytes(client(file, async () => { throw new Error('boom'); }), { fileId: 'F1', channelId: 'C1' }),
+      (err: any) => err.message === 'boom' && err.status === undefined,
+    );
+  });
+
+  it('allows an HTML response only for a file whose own type is HTML', async () => {
+    const seen: any[] = [];
+    const record = async (_url: string, opts: any) => { seen.push(opts); return { buffer: Buffer.from('<p>x</p>'), contentType: 'text/html' }; };
+    const c = (f: any) => ({ filesInfo: async () => ({ file: f }), downloadFileBytes: record }) as any;
+    await performDownloadFileBytes(c({ ...file, name: 'page.html', mimetype: 'text/html' }), { fileId: 'F1', channelId: 'C1' });
+    await performDownloadFileBytes(c(file), { fileId: 'F1', channelId: 'C1' });
+    assert.deepEqual(seen.map(o => o?.allowHtml), [true, false]);
+  });
+
+  it('refuses an unshared file with 403 and rethrows a files.info failure untouched', async () => {
+    await assert.rejects(
+      performDownloadFileBytes(client(file, async () => ({})), { fileId: 'F1', channelId: 'C9' }),
+      (err: any) => err.status === 403,
+    );
+    const failing = { filesInfo: async () => { throw new Error('file_not_found'); } } as any;
+    await assert.rejects(performDownloadFileBytes(failing, { fileId: 'F1', channelId: 'C1' }), /file_not_found/);
   });
 });

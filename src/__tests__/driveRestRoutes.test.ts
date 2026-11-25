@@ -195,6 +195,52 @@ describe('createFromTemplate', () => {
   });
 });
 
+describe('createDocument', () => {
+  it('creates a Google Doc and answers 201 with initialContentWritten null when no text was sent', async () => {
+    const { status, body, clients } = await call('createDocument', {}, { title: 'Notes' });
+    assert.equal(status, 201);
+    const sent = clients.googleDrive.files.create.mock.calls[0].arguments[0];
+    assert.equal(sent.requestBody.mimeType, 'application/vnd.google-apps.document');
+    assert.equal(sent.requestBody.parents, undefined);
+    assert.equal((body as any).initialContentWritten, null);
+    assert.equal(clients.googleDocs.documents.batchUpdate.mock.calls.length, 0);
+  });
+
+  it('inserts the initial text at index 1 into the parent folder given', async () => {
+    const { body, clients } = await call('createDocument', {}, { title: 'Notes', parentFolderId: 'f1', initialContent: 'Hello' });
+    assert.deepEqual(clients.googleDrive.files.create.mock.calls[0].arguments[0].requestBody.parents, ['f1']);
+    const req = clients.googleDocs.documents.batchUpdate.mock.calls[0].arguments[0].requestBody.requests[0];
+    assert.deepEqual(req, { insertText: { location: { index: 1 }, text: 'Hello' } });
+    assert.equal((body as any).initialContentWritten, true);
+  });
+
+  it('still answers 201 when the text insert fails, saying so', async () => {
+    const batchUpdate = mock.fn(async () => { throw new Error('docs down'); });
+    const { status, body } = await call('createDocument', {}, { title: 'Notes', initialContent: 'Hello' }, mockClients({}, { batchUpdate }));
+    assert.equal(status, 201);
+    assert.equal((body as any).initialContentWritten, false);
+    assert.equal((body as any).initialContentError, 'docs down');
+  });
+
+  it('refuses an empty title before reaching Drive', () => {
+    const route = routeFor('createDocument');
+    assert.equal(route.schema.safeParse(writeArgs(route, { params: {}, body: { title: '' } })).success, false);
+  });
+
+  it('validates with the very schema the createDocument tool declares', async () => {
+    const tools = new Map<string, any>();
+    const FastMCPModule = await import('fastmcp');
+    const orig = FastMCPModule.FastMCP.prototype.addTool;
+    FastMCPModule.FastMCP.prototype.addTool = function (t: any) { tools.set(t.name, t); return orig.call(this, t); };
+    try {
+      await import('../google-drive/server.js');
+    } finally {
+      FastMCPModule.FastMCP.prototype.addTool = orig;
+    }
+    assert.equal(tools.get('createDocument').parameters, routeFor('createDocument').schema);
+  });
+});
+
 describe('share', () => {
   it('creates the permission, emails by default, and answers 201', async () => {
     const { status, body, clients } = await call(

@@ -273,6 +273,36 @@ export const updateListItemRestSchema = z.object(updateListItemFields).strict();
 
 type Args<T extends z.ZodRawShape> = z.infer<z.ZodObject<T>>;
 
+/**
+ * findCanvasSections' search criteria, spread by the tool and validated from the
+ * query string on GET /api/v1/slack/canvases/{canvasId}/sections. Needing at
+ * least one of the two is checked in assertSectionCriteria, not with a refine.
+ */
+export const findCanvasSectionsFields = {
+  containsText: z.string().optional().describe('Sections containing this text.'),
+  sectionTypes: z.array(z.enum(['h1', 'h2', 'h3', 'any_header'])).optional().describe('Only these header types.'),
+};
+export const findCanvasSectionsQuerySchema = z.object(findCanvasSectionsFields);
+
+/** Refuse a lookup with no criteria: Slack would have nothing to match on. */
+export function assertSectionCriteria(args: Args<typeof findCanvasSectionsFields>): void {
+  if (!args.containsText && !args.sectionTypes?.length) throw refusal(400, 'Give containsText and/or sectionTypes.');
+}
+
+/** Section ids matching the criteria, in the order Slack returns them. A read: no writes gate. */
+export async function performFindCanvasSections(
+  client: SlackClient,
+  canvasId: string,
+  args: Args<typeof findCanvasSectionsFields>,
+): Promise<{ canvasId: string; sections: Array<{ id: string }> }> {
+  assertSectionCriteria(args);
+  const { sections } = await client.canvasesSectionsLookup(canvasId, {
+    ...(args.containsText ? { contains_text: args.containsText } : {}),
+    ...(args.sectionTypes?.length ? { section_types: args.sectionTypes } : {}),
+  });
+  return { canvasId, sections: sections ?? [] };
+}
+
 export async function performCreateChannel(client: SlackClient, args: Args<typeof createChannelFields>) {
   assertWritesEnabled();
   const { channel } = await client.conversationsCreate(normalizeChannelName(args.name), args.isPrivate ?? false);
@@ -521,20 +551,13 @@ export function registerSlackWorkspaceTools(server: FastMCP<UserSession>, opts: 
     name: 'findCanvasSections',
     annotations: { readOnlyHint: true },
     description: 'Finds section IDs in a canvas (by text or header type), for editCanvas insert_before/insert_after/replace_section.',
-    parameters: z.object({
-      canvasId: z.string().describe('Canvas ID.'),
-      containsText: z.string().optional().describe('Sections containing this text.'),
-      sectionTypes: z.array(z.enum(['h1', 'h2', 'h3', 'any_header'])).optional().describe('Only these header types.'),
-    }),
+    parameters: z.object({ canvasId: z.string().describe('Canvas ID.'), ...findCanvasSectionsFields }),
     execute: async (args, { session }) => {
-      if (!args.containsText && !args.sectionTypes?.length) throw refusal(400, 'Give containsText and/or sectionTypes.');
+      assertSectionCriteria(args);
       const client = opts.getClient(session);
       await guardFile(client, session!, args.canvasId);
-      const { sections } = await client.canvasesSectionsLookup(args.canvasId, {
-        ...(args.containsText ? { contains_text: args.containsText } : {}),
-        ...(args.sectionTypes?.length ? { section_types: args.sectionTypes } : {}),
-      });
-      if (!sections?.length) return 'No matching sections.';
+      const { sections } = await performFindCanvasSections(client, args.canvasId, args);
+      if (!sections.length) return 'No matching sections.';
       return `${sections.length} section(s): ${sections.map((sct) => sct.id).join(', ')}`;
     },
   });

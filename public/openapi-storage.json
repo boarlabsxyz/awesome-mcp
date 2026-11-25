@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Storage MCP REST API",
-    "description": "REST data plane for the Storage MCP: per-user collections with enforced schemas. It exists so a script (for example in the Sandbox MCP) can read, query and bulk-write records without them crossing the LLM context window. Every request is validated with the MCP tools own Zod schemas and runs the same operations, so the two surfaces cannot drift. Data is the callers own: a bearer reaches only the records of the user it was minted for. Writes are insert and update only; deleting records, migrating and dropping collections stay MCP-only.",
+    "description": "REST data plane for the Storage MCP: per-user collections with enforced schemas. It exists so a script (for example in the Sandbox MCP) can read, query and bulk-write records without them crossing the LLM context window. Every request is validated with the MCP tools own Zod schemas and runs the same operations; checks the operations add beyond those schemas are stated in each operation here. Data is the callers own: a bearer reaches only the records of the user it was minted for. Writes are createCollection, insert and update; deleting records, migrating and dropping collections stay MCP-only.",
     "version": "1.0.0"
   },
   "servers": [
@@ -17,6 +17,157 @@
   ],
   "paths": {
     "/api/v1/storage/collections": {
+      "post": {
+        "operationId": "createStorageCollection",
+        "summary": "Create a collection with a fixed schema",
+        "description": "Admins only (ADMIN_EMAILS); others get 403. Shipped on the owner request for full REST coverage of non-destructive writes. The permanent dashboard API key can call it. Body is the createCollection tool arguments, the collection name included. Every record written later must match the schema exactly; it changes only through migrateCollection (MCP only).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "collection": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$",
+                    "description": "Collection name: starts with a letter, then letters, digits, _ or - (max 64 chars)."
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000,
+                    "description": "What this collection is for, so a later conversation knows when to use it."
+                  },
+                  "fields": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "number",
+                            "integer",
+                            "boolean",
+                            "datetime",
+                            "url",
+                            "string[]",
+                            "number[]",
+                            "json"
+                          ],
+                          "description": "string, number, integer, boolean, datetime (ISO 8601), url, string[], number[], or json (any object or array, for nested data that needs no querying)."
+                        },
+                        "required": {
+                          "type": "boolean",
+                          "default": false,
+                          "description": "Whether every record must carry this field."
+                        },
+                        "description": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500,
+                          "description": "What the field holds. Required: it is what a later conversation reads to understand the data."
+                        },
+                        "enum": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "minItems": 1,
+                          "maxItems": 100,
+                          "description": "Allowed values. Only for string and string[] fields."
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "description"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "The collection's fields, by name. Names start with a letter and use letters, digits and _ (max 64 chars); at most 50 fields.",
+                    "minProperties": 1,
+                    "maxProperties": 50
+                  },
+                  "keyField": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "A required string, url, integer or number field that uniquely identifies a record (e.g. profileUrl). Enables getRecord/updateRecord by key and insertRecords with onConflict \"update\"."
+                  },
+                  "ttlDays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3650,
+                    "description": "After this many days without an update a record reads as _stale: true, meaning re-fetch it from the source."
+                  }
+                },
+                "required": [
+                  "collection",
+                  "description",
+                  "fields"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Collection created; its schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, a bad field definition, a name already in use, or the collection quota reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No database configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "operationId": "listStorageCollections",
         "summary": "List your storage collections with record counts and quotas",

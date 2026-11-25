@@ -17,6 +17,151 @@
     }
   ],
   "paths": {
+    "/api/v1/calendars/freebusy": {
+      "get": {
+        "operationId": "queryFreeBusy",
+        "summary": "Busy intervals for one or more calendars in a time range",
+        "description": "Mirrors the MCP tool `queryFreeBusy`. Returns JSON in request order. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free. timeMin, timeMax and timeZone may each be given once; a repeated or empty one, or an empty calendarIds, is a 400. Omitted parameters take their defaults.",
+        "tags": [
+          "calendar"
+        ],
+        "parameters": [
+          {
+            "name": "calendarIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Calendar ids or email addresses, comma-separated (calendarIds=a,b), repeated (calendarIds=a&calendarIds=b) or both: every value is combined into one list of at most 50. Omit it for the primary calendar; an empty value is refused."
+          },
+          {
+            "name": "timeMin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Start of the window, ISO 8601. Defaults to now."
+          },
+          {
+            "name": "timeMax",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "End of the window, ISO 8601, after timeMin. Defaults to 7 days after timeMin."
+          },
+          {
+            "name": "timeZone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "IANA time zone for the response, e.g. Europe/Berlin."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Busy intervals per calendar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "timeMin": {
+                      "type": "string"
+                    },
+                    "timeMax": {
+                      "type": "string"
+                    },
+                    "timeZone": {
+                      "type": "string"
+                    },
+                    "calendars": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "busy": {
+                            "type": "array",
+                            "nullable": true,
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "start": {
+                                  "type": "string"
+                                },
+                                "end": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "errors": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A repeated or empty parameter, an empty calendarIds, more than 50 calendars, an unparseable time, or timeMax not after timeMin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Calendar not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/calendars": {
       "get": {
         "operationId": "listCalendars",

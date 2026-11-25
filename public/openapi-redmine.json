@@ -3850,7 +3850,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Records for the requested window, as { items, page } \u2014 `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "description": "Every custom field definition in one response, as { items, page }. Redmine does not page this endpoint and the route sends no offset or limit, so items is the whole list and page is usually empty.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4698,7 +4698,7 @@
       "post": {
         "operationId": "deleteRedmineVersion",
         "summary": "Permanently delete a Redmine version",
-        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Issues that targeted it are left with no target version. Mirrors the MCP tool `deleteVersion`.",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Redmine refuses (422, often with no error text) while any blocker remains: issues that still target the version (reassign or clear their target version), a version custom field value that references it (clear that value), or files attached to the version (delete them). Clear every blocker that applies, then retry. Mirrors the MCP tool `deleteVersion`.",
         "tags": [
           "redmine"
         ],

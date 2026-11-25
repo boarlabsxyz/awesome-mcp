@@ -210,6 +210,71 @@ export async function opStart(
   return `${parts.join('\n\n')}${sessionReminder(sessionId)}`;
 }
 
+export interface EndResult {
+  sessionId: string;
+  closed: true;
+  /** `end` when the hosted call closed it; `release` when that failed and the REST release did. */
+  closedVia: 'end' | 'release';
+  /**
+   * true once Browserbase accepted a release. null when only the hosted end
+   * succeeded: a keep-alive session can survive it, so whether it still bills
+   * is unknown rather than false.
+   */
+  billingStopped: true | null;
+  /** Why the hosted end failed, when closedVia is release. */
+  endError?: string;
+  /** Why the follow-up release was refused, when billingStopped is null. */
+  releaseError?: string;
+  dashboardUrl: string;
+}
+
+const errorText = (err: any): string => safeErrorText(err?.message ?? String(err));
+
+/**
+ * Close a session by id: the hosted `end`, then always a REST release, because a
+ * keep-alive session may survive the hosted call. When the hosted call fails the
+ * release is the fallback. opEnd renders the result. MCP-only: the owner
+ * declined a REST route for it, since it always ends in a force release.
+ *
+ * Both failing throws, tagged 404 when the release says the session does not
+ * exist and 502 otherwise: nothing confirmed the close, so reporting one would
+ * leave a browser billing that the caller believes is gone.
+ */
+export async function performEnd(
+  proxy: HostedProxy,
+  client: BrowserbaseClient,
+  sessionId: string,
+): Promise<EndResult> {
+  const dashboardUrl = sessionDashboardUrl(sessionId);
+  let endError: string | undefined;
+  try {
+    // The upstream payload is dropped: a close either happened or it did not,
+    // and the payload is a CDP fragment that tells the caller nothing.
+    await proxy('end', { sessionId });
+  } catch (err: any) {
+    endError = errorText(err);
+  }
+
+  try {
+    await client.releaseSession(sessionId);
+  } catch (releaseErr: any) {
+    if (endError === undefined) {
+      return { sessionId, closed: true, closedVia: 'end', billingStopped: null, releaseError: errorText(releaseErr), dashboardUrl };
+    }
+    const err: any = new Error(
+      `Could not close session ${sessionId}. The browser-control call failed (${endError}) and so did the ` +
+        `REST release (${errorText(releaseErr)}). It may still be running and billing — check ${dashboardUrl} and close it there.`,
+    );
+    err.name = 'BrowserbaseEndFailed';
+    err.status = releaseErr?.status === 404 ? 404 : 502;
+    throw err;
+  }
+
+  return endError === undefined
+    ? { sessionId, closed: true, closedVia: 'end', billingStopped: true, dashboardUrl }
+    : { sessionId, closed: true, closedVia: 'release', billingStopped: true, endError, dashboardUrl };
+}
+
 /**
  * Close a session.
  *
@@ -227,51 +292,40 @@ export async function opEnd(
   args: z.infer<typeof endSchema>,
 ): Promise<string> {
   const { sessionId } = args;
-  try {
-    const text = await callProxy(proxy, 'end', sessionId ? { sessionId } : {});
-    const suffix = sessionId ? ` (${sessionId})` : '';
-    // The upstream payload is dropped, not sanitized-and-echoed. `end` had no
-    // sanitizing path at all, so it was returning the raw text — but the right
-    // answer here is not to return it: a close either happened or it did not,
-    // and the payload is a CDP fragment that tells the caller nothing. Echoing
-    // a redacted version would just be noise with a redaction note attached.
-    void text;
-    if (!sessionId) {
-      return 'Browser session closed. With keep-alive on, a session can outlive this call — run listBrowserSessions to check nothing is still RUNNING.';
-    }
-    // A keep-alive session (connection Settings) may survive the hosted `end`.
-    // An explicit release is idempotent, so it is always sent, and "no longer
-    // billing" is claimed only when Browserbase accepted it.
+  if (!sessionId) {
     try {
-      await client.releaseSession(sessionId);
-      return `Browser session closed${suffix}. It is no longer billing.`;
-    } catch (releaseErr: any) {
-      return (
-        `Browser session closed${suffix}, but the follow-up release was not accepted (${releaseErr?.message ?? releaseErr}). ` +
-        `If keep-alive is on it may still be running: check getBrowserSession and forceEndBrowserSession if needed.`
-      );
-    }
-  } catch (proxyErr: any) {
-    if (!sessionId) {
+      // The upstream payload is dropped, not sanitized-and-echoed: a close
+      // either happened or it did not, and the payload is a CDP fragment.
+      await callProxy(proxy, 'end', {});
+    } catch (proxyErr: any) {
       throw new UserError(
         `Could not close the session: ${proxyErr?.message ?? proxyErr}. No sessionId was passed, so there is nothing to fall back to — ` +
           `run listBrowserSessions to find what is still RUNNING, then forceEndBrowserSession with its id.`,
       );
     }
-    try {
-      await client.releaseSession(sessionId);
-      return (
-        `Browser session ${sessionId} closed via the Browserbase REST API — it is no longer billing.\n\n` +
-        `Note the browser-control call failed first (${proxyErr?.message ?? proxyErr}), so the session was released rather than shut down cleanly.`
-      );
-    } catch (restErr: any) {
-      throw new UserError(
-        `Could not close session ${sessionId}. The browser-control call failed (${proxyErr?.message ?? proxyErr}) and so did the ` +
-          `REST release (${restErr?.message ?? restErr}). It may still be running and billing — check ` +
-          `${sessionDashboardUrl(sessionId)} and close it there.`,
-      );
-    }
+    return 'Browser session closed. With keep-alive on, a session can outlive this call — run listBrowserSessions to check nothing is still RUNNING.';
   }
+
+  // The close itself lives in performEnd, shared with the REST route, so the
+  // two surfaces cannot disagree about when a session counts as closed.
+  let result;
+  try {
+    result = await performEnd(proxy, client, sessionId);
+  } catch (err: any) {
+    throw new UserError(err?.message ?? String(err));
+  }
+  const suffix = ` (${sessionId})`;
+  if (result.closedVia === 'release') {
+    return (
+      `Browser session ${sessionId} closed via the Browserbase REST API — it is no longer billing.\n\n` +
+      `Note the browser-control call failed first (${result.endError}), so the session was released rather than shut down cleanly.`
+    );
+  }
+  if (result.billingStopped === true) return `Browser session closed${suffix}. It is no longer billing.`;
+  return (
+    `Browser session closed${suffix}, but the follow-up release was not accepted (${result.releaseError}). ` +
+    `If keep-alive is on it may still be running: check getBrowserSession and forceEndBrowserSession if needed.`
+  );
 }
 
 /**

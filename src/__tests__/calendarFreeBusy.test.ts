@@ -14,7 +14,7 @@ FastMCPModule.FastMCP.prototype.addTool = function (tool: any) {
   toolMap.set(tool.name, tool);
   return origAddTool.call(this, tool);
 };
-await import('../google-calendar/server.js');
+const calendarModule = await import('../google-calendar/server.js');
 FastMCPModule.FastMCP.prototype.addTool = origAddTool;
 
 const noopLog = { info: () => {}, error: () => {}, warn: () => {} };
@@ -171,5 +171,34 @@ describe('queryFreeBusy', () => {
   it('maps any other failure to "Failed to query free/busy"', async () => {
     const calendar = mkCalendar(async () => { throw mkErr(500, 'backend down'); });
     await assert.rejects(() => run({}, calendar), (e: any) => e instanceof UserError && /Failed to query free\/busy: backend down/.test(e.message));
+  });
+});
+
+describe('performQueryFreeBusy (REST data)', () => {
+  it('answers in request order, with unread or missing calendars as busy null, never free', async () => {
+    const { performQueryFreeBusy, queryFreeBusySchema } = calendarModule as any;
+    const calendar = mkCalendar(async () => ({
+      data: {
+        calendars: {
+          'a@x.test': { busy: [{ start: '2026-01-01T10:00:00Z', end: '2026-01-01T11:00:00Z' }] },
+          'b@x.test': { errors: [{ reason: 'notFound' }] },
+        },
+      },
+    }));
+    const r = await performQueryFreeBusy(calendar, queryFreeBusySchema.parse({
+      calendarIds: ['c@x.test', 'a@x.test', 'b@x.test'],
+      timeMin: '2026-01-01T00:00:00Z', timeMax: '2026-01-02T00:00:00Z', timeZone: 'Europe/Berlin',
+    }));
+    assert.equal(r.timeZone, 'Europe/Berlin');
+    assert.deepEqual(r.calendars.map((c: any) => c.id), ['c@x.test', 'a@x.test', 'b@x.test']);
+    assert.deepEqual(r.calendars[0], { id: 'c@x.test', busy: null, errors: ['notReturned'] });
+    assert.deepEqual(r.calendars[1].busy, [{ start: '2026-01-01T10:00:00Z', end: '2026-01-01T11:00:00Z' }]);
+    assert.deepEqual(r.calendars[2], { id: 'b@x.test', busy: null, errors: ['notFound'] });
+  });
+
+  it('rethrows a Google failure untouched so the route keeps its code', async () => {
+    const { performQueryFreeBusy, queryFreeBusySchema } = calendarModule as any;
+    const calendar = mkCalendar(async () => { throw mkErr(404); });
+    await assert.rejects(performQueryFreeBusy(calendar, queryFreeBusySchema.parse({})), (e: any) => e.code === 404);
   });
 });

@@ -1,0 +1,392 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Slack REST API",
+    "description": "REST data plane for the slack-bot connection. Operations not listed here are described by the merged public/openapi.json from the catalog.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://awesome-mcp.xyz",
+      "description": "Production server"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/slack/canvases/{canvasId}/sections": {
+      "get": {
+        "operationId": "findSlackCanvasSections",
+        "summary": "Find section ids in a canvas by text or header type",
+        "description": "Mirrors the MCP tool `findCanvasSections`. Give containsText, sectionTypes or both; neither is a 400. The ids feed POST /api/v1/slack/canvases/{canvasId}/edit. Needs a slack-bot connection.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "canvasId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Canvas id (F...)."
+          },
+          {
+            "name": "containsText",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Sections containing this text."
+          },
+          {
+            "name": "sectionTypes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "h1",
+                  "h2",
+                  "h3",
+                  "any_header"
+                ]
+              }
+            },
+            "description": "Comma-separated header types to match, e.g. h1,h2.",
+            "style": "form",
+            "explode": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching section ids, in Slack order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "canvasId": {
+                      "type": "string"
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither containsText nor sectionTypes, or an unknown header type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No slack-bot connection, or Slack denied the canvas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Canvas not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/slack/files/{fileId}/download": {
+      "get": {
+        "operationId": "downloadSlackFile",
+        "summary": "Download the bytes of a file shared in a channel or DM",
+        "description": "Mirrors the MCP tool `downloadFile`, but always returns the raw file bytes with the file content type and a Content-Disposition naming it, up to 20 MB. The tool url and inline formats are MCP-only. The file must be shared in channelId.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Slack file id (F...)."
+          },
+          {
+            "name": "channelId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The channel or DM the file was shared in."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file bytes, with the file own content type.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "attachment; filename (ASCII fallback) and filename* (UTF-8)."
+              }
+            },
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "channelId missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No slack-bot connection, the file is not shared in channelId, or the connection lacks files:read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found, or Slack returned no download URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A file hosted outside Slack, or one over 20 MB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/slack/dms": {
+      "post": {
+        "operationId": "openSlackDm",
+        "summary": "Open or retrieve a 1-on-1 or group DM and return its channel id",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Mirrors the MCP tool `openDm`. Give exactly one of userId or userIds. Answers 200 whether the DM was opened now or already existed. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403). Posts nothing, so it is not behind SLACK_WRITES_ENABLED.",
+        "tags": [
+          "slack"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "userId"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "userId": {
+                        "type": "string",
+                        "description": "The Slack user ID to open a 1-on-1 DM with (e.g., U01234ABCDE)."
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "userIds"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "userIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 2,
+                        "maxItems": 8,
+                        "description": "Open a group DM with these users (2-8). Give this or userId."
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The DM channel, new or existing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "channelId": {
+                      "type": "string"
+                    },
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "im",
+                        "mpim"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Both or neither of userId and userIds, an unknown key, or userIds outside 2-8",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a minted bearer, or no slack-bot connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "mintedBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key obtained from the registration dashboard"
+      },
+      "mintedBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Only the 5-minute bearer from the mintRestBearerForCurl MCP tool. The permanent dashboard API key is refused with 403 on Slack writes."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      }
+    }
+  }
+}

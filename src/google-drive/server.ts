@@ -41,6 +41,7 @@ import {
   copyFileSchema,
   renameFileSchema,
   deleteFileSchema,
+  createDocumentSchema,
   createFromTemplateSchema,
   shareDriveFileSchema,
 } from './schemas.js';
@@ -135,11 +136,7 @@ driveServer.addTool({
   name: 'createDocument',
   annotations: { readOnlyHint: false },
   description: 'Creates a new Google Document (works with shared drives).',
-  parameters: z.object({
-    title: z.string().min(1).describe('Title for the new document.'),
-    parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root. For shared drives, use a folder ID within the shared drive.'),
-    initialContent: z.string().optional().describe('Initial text content to add to the document.'),
-  }),
+  parameters: createDocumentSchema,
   execute: async (args, { log, session }) =>
     handleCreateDocument(getDriveClient(session), () => getDocsClient(session), args, log),
 });

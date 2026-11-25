@@ -18,6 +18,7 @@
 - **`moveFile` copies unless `removeFromAllParents` is true** — Drive allows one parent per item, so "keep the old parents" can only be a copy. REST answers 201 `action: copied` for that, 200 `moved` otherwise.
 - **`/folders` and `/files/:id/copy` keep their legacy 200 and response keys** — they were ChatGPT Custom Actions routes before the catalog.
 - **`createFromTemplate` takes Google Docs only, checked before copying** (anything else would be copied whole), and **puts the copy in My Drive root without `parentFolderId`** — unset, Drive puts it beside the template, with that folder's sharing.
+- **`createDocument` is `POST /api/v1/drive/documents`** (owner request for full coverage of non-destructive writes); 201 even when the text insert fails, with `initialContentWritten` three-valued (`null` = no text sent). `/api/v1/drive/documents` is in `REST_LARGE_BODY_PREFIXES` for `initialContent`.
 - **`createFromTemplate` answers 201 even when the replacements fail** — the copy exists either way; `replacements` reports `applied` and `occurrencesChanged` per placeholder (0 = not in the template).
 
 ## Source Files

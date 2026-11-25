@@ -1,6 +1,6 @@
 // src/slack/apiHelpers.ts
 import { UserError } from 'fastmcp';
-import { fetchSlackFileBytes, type SlackFileBytes } from './fileDownload.js';
+import { fetchSlackFileBytes, type SlackFileBytes, type SlackFileFetchOptions } from './fileDownload.js';
 
 const SLACK_API_BASE = 'https://slack.com/api';
 
@@ -812,7 +812,7 @@ export class SlackClient {
    * Download a Slack-hosted file's bytes. Kept as a thin delegate so the token
    * stays private to this class and never has to be threaded through callers.
    */
-  async downloadFileBytes(url: string, opts?: { maxBytes?: number }): Promise<SlackFileBytes> {
+  async downloadFileBytes(url: string, opts?: SlackFileFetchOptions): Promise<SlackFileBytes> {
     return fetchSlackFileBytes(url, this.botToken, opts);
   }
 

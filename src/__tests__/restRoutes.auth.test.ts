@@ -213,6 +213,10 @@ const NEW_REST_ENDPOINTS: ReadonlyArray<string> = [
   '/api/v1/outline/templates/tpl-123',
   '/api/v1/browserbase/sessions',
   '/api/v1/browserbase/sessions/sess-123',
+  // REST coverage pass: reads.
+  '/api/v1/calendars/freebusy?calendarIds=primary',
+  '/api/v1/slack/canvases/F123/sections?containsText=Intro',
+  '/api/v1/slack/files/F123/download?channelId=C123',
   // GitHub (registered from GITHUB_READ_ROUTES). The contents route is listed
   // with and without a path because the wildcard is optional — the bare form is
   // the repository root.
@@ -464,13 +468,25 @@ const NEW_REST_WRITE_ENDPOINTS: ReadonlyArray<string> = [
   // server-side export job, and a GET invites a proxy to repeat it.
   '/api/v1/outline/collections/col-123/export',
   '/api/v1/outline/exports',
-  // Browserbase. `act` is deliberately absent from the REST plane, so there is
-  // deliberately no path for it to gate.
+  // Browserbase.
   '/api/v1/browserbase/sessions/start',
   '/api/v1/browserbase/sessions/sess-123/navigate',
+  '/api/v1/browserbase/sessions/sess-123/act',
   '/api/v1/browserbase/sessions/sess-123/observe',
   '/api/v1/browserbase/sessions/sess-123/extract',
   '/api/v1/browserbase/sessions/sess-123/release',
+  // REST coverage pass: the non-destructive writes, and the HubSpot searches
+  // (reads served over POST: their filters are objects).
+  '/api/v1/sheets/sheet-123/sheets',
+  '/api/v1/sheets/sheet-123/cells/update-by-field',
+  '/api/v1/drive/documents',
+  '/api/v1/clickup/workspaces/ws-123/subscription',
+  '/api/v1/slack/dms',
+  '/api/v1/hubspot/companies/search',
+  '/api/v1/hubspot/contacts/search',
+  '/api/v1/hubspot/deals/search',
+  // '/api/v1/storage/collections' is in both arrays: GET lists, POST creates.
+  '/api/v1/storage/collections',
 ];
 
 describe('REST data-plane: auth gate', () => {

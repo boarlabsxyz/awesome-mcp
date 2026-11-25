@@ -31,7 +31,6 @@ const NO_REST_PLANE: Record<string, string> = {
   'src/sandbox/server.ts': 'No RestService in src/restCatalog.ts.',
 };
 
-const PREDATES = 'Predates this guard; REST not decided yet.';
 const DESTRUCTIVE = 'Destructive: a REST sibling needs sign-off recorded in the catalog notes (root CLAUDE.md).';
 const UNIMPLEMENTED = 'Throws NOT_IMPLEMENTED (e2e/tools.ts): an endpoint would only advertise a 500.';
 
@@ -51,44 +50,26 @@ const MCP_ONLY: Partial<Record<RestService, Record<string, string>>> = {
     rejectSuggestion: DESTRUCTIVE,
   },
   sheets: {
-    addSpreadsheetSheet: PREDATES,
     deleteSpreadsheetRowsOrColumns: DESTRUCTIVE,
-    updateCellByFieldName: PREDATES,
-  },
-  calendar: {
-    queryFreeBusy: PREDATES,
-  },
-  drive: {
-    createDocument: PREDATES,
   },
   gmail: {
     deleteFilter: DESTRUCTIVE,
   },
   clickup: {
-    subscribeToTaskEvents: PREDATES,
     unsubscribeFromTaskEvents: DESTRUCTIVE,
-  },
-  slack: {
-    downloadFile: PREDATES,
-    findCanvasSections: PREDATES,
-    openDm: PREDATES,
   },
   outline: {
     deleteCollection: DESTRUCTIVE,
     deleteComment: DESTRUCTIVE,
     deleteDocument: DESTRUCTIVE,
   },
-  hubspot: {
-    searchCompanies: PREDATES,
-    searchContacts: PREDATES,
-    searchDeals: PREDATES,
-  },
   redmine: {
     deleteProject: DESTRUCTIVE,
   },
   browserbase: {
-    act: PREDATES,
-    end: PREDATES,
+    // Always ends in a force release, like POST .../release, so in-progress
+    // browser work is lost. The owner declined a REST route for it.
+    end: DESTRUCTIVE,
   },
   supabase: {
     apply_migration: DESTRUCTIVE,
@@ -103,7 +84,6 @@ const MCP_ONLY: Partial<Record<RestService, Record<string, string>>> = {
     update_storage_config: DESTRUCTIVE,
   },
   storage: {
-    createCollection: PREDATES,
     deleteRecords: DESTRUCTIVE,
     dropCollection: DESTRUCTIVE,
     migrateCollection: DESTRUCTIVE,

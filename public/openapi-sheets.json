@@ -17,6 +17,575 @@
     }
   ],
   "paths": {
+    "/api/v1/sheets/{spreadsheetId}/search": {
+      "get": {
+        "operationId": "findRowByValue",
+        "summary": "Find a row by column value",
+        "description": "The 1-based number of the first row whose cell in column col equals val (exact, as displayed). Scans at most maxRows rows from startRow. Mirrors the MCP tool `findRowByValue`. Returns JSON; found is false when no row matches.",
+        "tags": [
+          "sheets"
+        ],
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          },
+          {
+            "name": "col",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]+$"
+            },
+            "description": "Column letters to search, e.g. A or AA. A cell reference is refused."
+          },
+          {
+            "name": "val",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "The value to match exactly. Empty is refused with 400."
+          },
+          {
+            "name": "sheet",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tab name, e.g. Q3 Plan; quoted for you. Defaults to the first tab."
+          },
+          {
+            "name": "startRow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "First row to scan (1-based)."
+          },
+          {
+            "name": "maxRows",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 10000
+            },
+            "description": "Rows to scan from startRow."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The match, or found false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "column": {
+                      "type": "string"
+                    },
+                    "searchValue": {
+                      "type": "string"
+                    },
+                    "sheet": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "startRow": {
+                      "type": "integer"
+                    },
+                    "maxRows": {
+                      "type": "integer"
+                    },
+                    "rowNumber": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "found": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "col or val missing, or col is not column letters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/ranges": {
+      "get": {
+        "operationId": "readSpreadsheet",
+        "summary": "Read a range from a spreadsheet",
+        "description": "GET sibling of POST /api/v1/sheets/{spreadsheetId}/read. Mirrors the MCP tool `readSpreadsheet`. Returns JSON, or the MCP text rendering with ?format=text or Accept: text/plain.",
+        "tags": [
+          "sheets"
+        ],
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A1 notation, e.g. Sheet1!A1:D10."
+          },
+          {
+            "name": "valueRenderOption",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "FORMATTED_VALUE",
+                "UNFORMATTED_VALUE",
+                "FORMULA"
+              ],
+              "default": "FORMATTED_VALUE"
+            },
+            "description": "FORMATTED_VALUE (the default) as displayed, UNFORMATTED_VALUE for the raw value, FORMULA for the formula text."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text for the MCP tool rendering; JSON otherwise."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The values in the range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "string"
+                    },
+                    "majorDimension": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {}
+                      }
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "range missing, or an unknown valueRenderOption",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/cells/update-by-field": {
+      "post": {
+        "operationId": "updateCellByFieldName",
+        "summary": "Find a row by a column value and write one field of it, named by header",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Row 1 holds the headers. Finds the first row BELOW the header row whose searchColumn equals searchValue (a header is never matched, so a header cell is never overwritten) and writes newValue into the column headed fieldName, returning the old value. No matching row is a 404 and an unknown header a 400 with availableHeaders; neither writes anything. searchColumn must be column letters. A sheetName with spaces or apostrophes is quoted for you. updatedCells 1 confirms the write.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "searchColumn": {
+                    "type": "string",
+                    "description": "Column letters to search in (e.g. \"A\" or \"AA\"). A cell reference such as \"A2\" is refused with 400.",
+                    "pattern": "^[A-Za-z]+$"
+                  },
+                  "searchValue": {
+                    "type": "string",
+                    "description": "The value to search for (exact match) to locate the row."
+                  },
+                  "fieldName": {
+                    "type": "string",
+                    "description": "The header name of the column to update."
+                  },
+                  "newValue": {
+                    "type": "string",
+                    "description": "The new value to write into the cell."
+                  },
+                  "sheetName": {
+                    "type": "string",
+                    "description": "Sheet/tab name. Defaults to the first sheet."
+                  }
+                },
+                "required": [
+                  "searchColumn",
+                  "searchValue",
+                  "fieldName",
+                  "newValue"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cell updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "updated": {
+                      "type": "object",
+                      "properties": {
+                        "row": {
+                          "type": "integer"
+                        },
+                        "column": {
+                          "type": "string"
+                        },
+                        "cell": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "rowContext": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "oldValue": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "newValue": {
+                      "type": "string"
+                    },
+                    "updatedCells": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, searchColumn not column letters, or fieldName is not a header (availableHeaders lists them)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found, or no row below the header row has searchValue in searchColumn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/sheets": {
+      "post": {
+        "operationId": "addSpreadsheetSheet",
+        "summary": "Add a tab to a spreadsheet, optionally sized",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Adds a sheet/tab. Google sizes a new tab at 1000 rows x 26 columns and a write does not grow the grid, so pass rowCount/columnCount when the data is bigger. Answers 201 with the sheet properties Google reports (sheetId, title, gridProperties). A tab name already in use is a 400.",
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sheetTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Title for the new sheet/tab."
+                  },
+                  "rowCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Rows in the new tab (Google default: 1000). Set this to at least the number of rows you are about to write."
+                  },
+                  "columnCount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Columns in the new tab (Google default: 26, i.e. A-Z)."
+                  }
+                },
+                "required": [
+                  "sheetTitle"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tab added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "sheetId": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "gridProperties": {
+                      "type": "object",
+                      "properties": {
+                        "rowCount": {
+                          "type": "integer"
+                        },
+                        "columnCount": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or Google refused the tab (e.g. a duplicate name)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Google answered with no sheet properties",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sheets": {
       "get": {
         "operationId": "listSpreadsheets",

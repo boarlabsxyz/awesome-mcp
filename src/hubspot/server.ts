@@ -92,11 +92,56 @@ const searchFilter = z.object({
   value: z.string().optional().describe('Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY.'),
 });
 
+/** Per-object copy for the search fields: example searchable properties, and the default returned ones. */
+const SEARCH_COPY: Record<'companies' | 'contacts' | 'deals', { queryExamples: string; defaultProperties: string }> = {
+  companies: { queryExamples: 'name, domain, phone', defaultProperties: 'name, domain, website, phone, industry' },
+  contacts: { queryExamples: 'name, email, phone', defaultProperties: 'firstname, lastname, email, company, phone' },
+  deals: { queryExamples: 'dealname', defaultProperties: 'dealname, amount, dealstage, pipeline, closedate' },
+};
+
 /**
- * Register a CRM search tool. searchCompanies and searchContacts take the same
- * parameters (free-text query and/or ANDed filters, requested properties, limit)
- * and share the "at least one of query/filters" guard that keeps an unbounded
- * match-all off the API — only the object searched and the copy differ.
+ * The parameters of searchCompanies / searchContacts / searchDeals, as a field
+ * OBJECT so the MCP tool and the REST route (POST /api/v1/hubspot/<label>/search)
+ * validate with the same definition. Needing a query or a filter is checked by
+ * assertSearchCriteria, not with a Zod refine (root CLAUDE.md).
+ */
+export function searchObjectFields(label: 'companies' | 'contacts' | 'deals') {
+  const copy = SEARCH_COPY[label];
+  return {
+    query: z.string().optional().describe(`Free-text search across the default searchable properties (e.g. ${copy.queryExamples}).`),
+    filters: z.array(searchFilter).optional().describe('Optional property filters, ANDed together.'),
+    properties: z
+      .array(z.string())
+      .optional()
+      .describe(
+        `Properties to return per match (defaults to ${copy.defaultProperties}). Every requested property is rendered — unset ones as "(empty)" — and any HubSpot does not return is listed in a note.`,
+      ),
+    limit: z.number().int().min(1).max(100).optional().default(10).describe('Maximum matches to return (default 10, max 100).'),
+  };
+}
+
+/** The REST body schema for one object type's search. */
+export function searchObjectsRestSchema(label: 'companies' | 'contacts' | 'deals') {
+  return z.object(searchObjectFields(label)).strict();
+}
+
+/**
+ * Refuse a search with neither a query nor a filter: it would be an unbounded
+ * match-all against the CRM. A UserError with no status, so the REST route
+ * answers 400.
+ */
+export function assertSearchCriteria(args: { query?: string; filters?: unknown[] }): void {
+  if (!args.query && !(args.filters?.length ?? 0)) {
+    throw new UserError('Provide a query and/or at least one filter.');
+  }
+}
+
+/**
+ * Register a CRM search tool. searchCompanies, searchContacts and searchDeals
+ * take the same parameters (free-text query and/or ANDed filters, requested
+ * properties, limit) and share the "at least one of query/filters" guard that
+ * keeps an unbounded match-all off the API — only the object searched and the
+ * copy differ.
  */
 function addSearchTool(opts: {
   name: string;
@@ -104,10 +149,6 @@ function addSearchTool(opts: {
   singular: string;
   /** How the tool description says a record can be looked up, e.g. "name or domain". */
   resolveBy: string;
-  /** Example searchable properties named in the `query` parameter description. */
-  queryExamples: string;
-  /** Default returned properties named in the `properties` parameter description. */
-  defaultProperties: string;
 }): void {
   hubspotServer.addTool({
     name: opts.name,
@@ -115,26 +156,14 @@ function addSearchTool(opts: {
     description:
       `Search HubSpot ${opts.label} by free-text query and/or property filters. Returns each match's ID, name, and requested properties. ` +
       `Use this to resolve a ${opts.singular} by ${opts.resolveBy}, or any property, to its ID before calling the by-ID ${opts.singular} tools.`,
-    parameters: z
-      .object({
-        query: z.string().optional().describe(`Free-text search across the default searchable properties (e.g. ${opts.queryExamples}).`),
-        filters: z.array(searchFilter).optional().describe('Optional property filters, ANDed together.'),
-        properties: z
-          .array(z.string())
-          .optional()
-          .describe(
-            `Properties to return per match (defaults to ${opts.defaultProperties}). Every requested property is rendered — unset ones as "(empty)" — and any HubSpot does not return is listed in a note.`,
-          ),
-        limit: z.number().int().min(1).max(100).optional().default(10).describe('Maximum matches to return (default 10, max 100).'),
-      })
-      .refine(a => Boolean(a.query) || (a.filters?.length ?? 0) > 0, {
-        message: 'Provide a query and/or at least one filter.',
-      }),
-    execute: (args, { log, session }) =>
-      withHubSpotClient(`Failed to search ${opts.label}`, session, log, (client) => {
+    parameters: z.object(searchObjectFields(opts.label)),
+    execute: (args, { log, session }) => {
+      assertSearchCriteria(args);
+      return withHubSpotClient(`Failed to search ${opts.label}`, session, log, (client) => {
         log.info(`${opts.name} query=${args.query ?? ''} filters=${args.filters?.length ?? 0}`);
         return opSearchObjects(client, opts.label, args);
-      }),
+      });
+    },
   });
 }
 
@@ -463,11 +492,17 @@ export type SearchArgs = { query?: string; filters?: HubSpotSearchFilter[]; prop
 // Companies and contacts search identically — same request body, same output
 // shape — so both search ops run through here, differing only in the endpoint
 // and the default property set.
-async function opSearchObjects(
+/**
+ * One CRM search, returning HubSpot's raw response and the properties asked for
+ * (the defaults when none were given), so the REST route answers the upstream
+ * JSON and the MCP tool renders the same result.
+ */
+export async function performSearchObjects(
   client: HubSpotClient,
   label: 'companies' | 'contacts' | 'deals',
   args: SearchArgs,
-): Promise<string> {
+): Promise<{ result: any; properties: string[] }> {
+  assertSearchCriteria(args);
   const defaults = {
     companies: COMPANY_SEARCH_PROPERTIES,
     contacts: CONTACT_SEARCH_PROPERTIES,
@@ -480,8 +515,16 @@ async function opSearchObjects(
     contacts: () => client.searchContacts(body),
     deals: () => client.searchDeals(body),
   }[label];
-  const res = await search();
-  return formatObjectList(res.results ?? [], label, properties);
+  return { result: await search(), properties };
+}
+
+async function opSearchObjects(
+  client: HubSpotClient,
+  label: 'companies' | 'contacts' | 'deals',
+  args: SearchArgs,
+): Promise<string> {
+  const { result, properties } = await performSearchObjects(client, label, args);
+  return formatObjectList(result.results ?? [], label, properties);
 }
 
 // Search companies by free-text query and/or property filters. The primary way
@@ -1283,8 +1326,6 @@ addSearchTool({
   label: 'companies',
   singular: 'company',
   resolveBy: 'name or domain',
-  queryExamples: 'name, domain, phone',
-  defaultProperties: 'name, domain, website, phone, industry',
 });
 
 hubspotServer.addTool({
@@ -1349,8 +1390,6 @@ addSearchTool({
   label: 'contacts',
   singular: 'contact',
   resolveBy: 'name or email',
-  queryExamples: 'name, email, phone',
-  defaultProperties: 'firstname, lastname, email, company, phone',
 });
 
 hubspotServer.addTool({
@@ -1394,8 +1433,6 @@ addSearchTool({
   label: 'deals',
   singular: 'deal',
   resolveBy: 'name',
-  queryExamples: 'dealname',
-  defaultProperties: 'dealname, amount, dealstage, pipeline, closedate',
 });
 
 hubspotServer.addTool({

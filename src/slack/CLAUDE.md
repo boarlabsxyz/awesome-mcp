@@ -12,7 +12,7 @@ Access rules, search and org discovery (user-token server): see `src/slack-user/
 - **`downloadFile(fileId, channelId, format)` must verify the file is shared in `channelId`** — `fileShareTargets` unions `channels`/`groups`/`ims` and `shares.public`/`shares.private`; stops a denied channel's file being laundered through an allowed one (slack-user runs `enforceAccess` first).
 - **`format: 'url'` re-hosts via `store(..., { ephemeral: true })`** (`src/images/imageBlobStore.ts`) to a **public, unauthenticated** `/images/<hash>.webp` (a private-DM screenshot becomes URL-fetchable). Ephemeral bounds exposure to `IMAGE_RETENTION_DAYS` (default 30, `0` disables) — not a guarantee: a content-addressed blob shared with a permanent use is promoted. Needs `DATABASE_URL` + `IMAGE_PUBLIC_BASE_URL`.
 - **`format: 'inline'` returns a FastMCP `imageContent` block** (≤1.5 MB, no image host) — the repo's only non-string result. Text files return text; others metadata + permalink.
-- **`fileDownload.ts` attaches the bearer per redirect hop, only for `*.slack.com`** (never to S3). A token lacking `files:read` gets **200 + an HTML sign-in page**; reject it, never store it.
+- **`fileDownload.ts` attaches the bearer per redirect hop, only for `*.slack.com`** (never to S3). A token lacking `files:read` gets **200 + an HTML sign-in page**; reject it (tagged 403), never store it — except for a file whose own mimetype is `text/html` (`allowHtml`), where an HTML response is the file.
 
 ### Posting & editing
 - **mrkdwn has no lists** — `- item` renders literally. `postMessage`/`replyInThread`/`editMessage` (both servers) take `richTextParams`: `markdownText` → `markdown_text` (preferred, 12,000-char cap) and `blocks` → Block Kit (list = `rich_text` holding `rich_text_list`, `style: 'bullet'|'ordered'`).
@@ -50,7 +50,9 @@ Access rules, search and org discovery (user-token server): see `src/slack-user/
 - **Refusals carry a numeric `status`** (`refusal()` in `helpers.ts`) because the rewritten messages no longer contain Slack's code; `slackWriteErrorStatus` reads it first and maps an upstream 401 to 502. The GET routes still use `mapSlackErrorToHttpStatus`, 401 included.
 - **Responses report what Slack echoed** (`projectWriteOutcome`): `message` is Slack's stored object (`null` if none); `broadcast` is `true` only on a `thread_broadcast` subtype, else `null`; unfurl flags come back as `requested` with `confirmed: null`.
 - **GET reads return Slack's raw objects; `?format=text` gives the MCP line format** (history then caps `limit` at 100). slack-user is not on REST (its access rules are not enforced there).
-- **No `public/openapi-slack.json` yet** — the root spec's stubs for the POSTs have no `requestBody`.
+- **`public/openapi-slack.json` covers only `/dms`, `/canvases/{id}/sections` and `/files/{id}/download`** — the other Slack POSTs are still body-less root stubs generated from the catalog.
+- **`POST /dms` (openDm) joins `SLACK_WRITE_ROUTES`**, minted bearer only like every Slack write, but NOT behind `SLACK_WRITES_ENABLED` (it posts nothing; the tool never was). 200, since Slack returns an already-open DM. `resolveDmUsers` refuses with `refusal(400)`.
+- **`GET /canvases/{id}/sections` and `GET /files/{id}/download?channelId=` map errors with `slackWriteErrorStatus`**, not the read mapper: their refusals carry a status and an upstream 401 must be 502. The download streams raw bytes (20 MB cap) after `resolveSharedFile`'s share check, the same one the tool runs; the tool's `url`/`inline` formats are MCP-only (`mcpOnly` in the catalog). Not-shared and missing `files:read` are 403, external or over-cap 422, no download URL 404.
 
 ### Channel events (slack-user tools, shared code)
 - **A store you poll, not a push** (`subscribeToChannelEvents` & co.). No per-user Slack subscription API: delivery is app-wide (Request URL + `SLACK_SIGNING_SECRET`), so subscribing only inserts a local filter.

@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { z } from 'zod';
 import {
   taskUpdateFields, listUpdateFields, createDocFields,
-  createPageFields, editPageFields, insertImageFields,
+  createPageFields, editPageFields, insertImageFields, subscribeToTaskEventsFields,
 } from '../clickup/restWrites.js';
 import {
   createDocumentFields, updateDocumentFields, moveDocumentFields,
@@ -15,8 +15,10 @@ import {
   navigateFields, actFields, observeFields, extractFields,
 } from '../browserbase/schemas.js';
 import {
-  postMessageFields, replyInThreadFields, editMessageFields,
+  postMessageFields, replyInThreadFields, editMessageFields, openDmFields,
 } from '../slack/helpers.js';
+import { findCanvasSectionsFields } from '../slack/workspaceTools.js';
+import { searchObjectFields } from '../hubspot/server.js';
 
 // The REST write plane and the MCP tools must not drift on what is valid. The
 // mechanism is that each write's camelCase fields are declared ONCE, in
@@ -59,8 +61,7 @@ const GROUPS: Record<string, [Record<string, z.ZodTypeAny>, string[]]> = {
   // Browserbase. These groups deliberately do NOT include sessionId: the MCP
   // tool takes it as a parameter and the REST route reads it from the path, so
   // a sessionId appearing here would let a URL and a body disagree about which
-  // browser to drive. actFields has no REST sibling at all (act is MCP-only by
-  // design) but is declared the same way so the four read alike.
+  // browser to drive.
   navigateFields: [navigateFields as any, ['url']],
   actFields: [actFields as any, ['action']],
   observeFields: [observeFields as any, ['instruction']],
@@ -72,6 +73,12 @@ const GROUPS: Record<string, [Record<string, z.ZodTypeAny>, string[]]> = {
     'text', 'markdownText', 'blocks', 'broadcast', 'unfurlLinks', 'unfurlMedia',
   ]],
   editMessageFields: [editMessageFields as any, ['text', 'markdownText', 'blocks']],
+  openDmFields: [openDmFields as any, ['userId', 'userIds']],
+  findCanvasSectionsFields: [findCanvasSectionsFields as any, ['containsText', 'sectionTypes']],
+  subscribeToTaskEventsFields: [subscribeToTaskEventsFields as any, ['events']],
+  // HubSpot search: one builder per object type (only the copy differs), so the
+  // companies variant stands for all three.
+  searchObjectFields: [searchObjectFields('companies') as any, ['query', 'filters', 'properties', 'limit']],
 };
 
 /** A Zod description, looking through optional/default/nullable wrappers. */
@@ -141,8 +148,6 @@ describe('REST write schema sharing', () => {
       // of the same name would let a URL and a body name different browsers —
       // and on this connector that is not a cosmetic conflict: the whole
       // session contract is that the id identifies which browser to drive.
-      // actFields has no REST route, but the id is a path param on the MCP side
-      // all the same, so the same rule applies.
       navigateFields: ['sessionId'],
       actFields: ['sessionId'],
       observeFields: ['sessionId'],
@@ -150,6 +155,10 @@ describe('REST write schema sharing', () => {
       postMessageFields: ['channelId'],
       replyInThreadFields: ['channelId', 'threadTs'],
       editMessageFields: ['channelId', 'ts'],
+      openDmFields: [],
+      findCanvasSectionsFields: ['canvasId'],
+      subscribeToTaskEventsFields: ['workspaceId'],
+      searchObjectFields: [],
     };
     assert.deepEqual(
       Object.keys(PATH_PARAMS).sort(), Object.keys(GROUPS).sort(),

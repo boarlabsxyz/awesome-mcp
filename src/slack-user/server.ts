@@ -27,7 +27,7 @@ import type { SlackAccessRules } from '../mcpConnectionStore.js';
 import { registerMintRestBearerForCurl } from '../sharedTools/mintRestBearerForCurl.js';
 import { registerListRestEndpoints } from '../sharedTools/listRestEndpoints.js';
 import { guardFileByShares, registerSlackWorkspaceTools } from '../slack/workspaceTools.js';
-import { resolveDmUsers, formatMessage, formatTimestamp, getWorkspaceUrl } from '../slack/helpers.js';
+import { openDmFields, performOpenDm, formatOpenDm, formatMessage, formatTimestamp, getWorkspaceUrl } from '../slack/helpers.js';
 import {
   scanUnread, findFirstUnread, readCursor, markRead, markUnreadFrom, serializeMark, isRateLimited,
   NEVER_READ, FIRST_UNREAD_MAX_PAGES, type MarkOutcome, type ScanSource,
@@ -700,17 +700,8 @@ slackUserServer.addTool({
   name: 'openDm',
   annotations: { readOnlyHint: false },
   description: 'Open (or retrieve) a DM: 1-on-1 with userId, or a group DM with userIds (2-8 people). Returns the channel ID to use with postMessage.',
-  parameters: z.object({
-    userId: z.string().optional().describe('The Slack user ID to open a 1-on-1 DM with (e.g., U01234ABCDE).'),
-    userIds: z.array(z.string()).min(2).max(8).optional().describe('Open a group DM with these users (2-8). Give this or userId.'),
-  }),
-  execute: async (args, { session }) => {
-    const client = getSlackUserClient(session);
-    const users = resolveDmUsers(args);
-    const result = await client.conversationsOpen(users.join(','));
-    const kind = users.length > 1 ? `Group DM with ${users.length} people` : 'DM channel';
-    return `${kind} opened: ${result.channel.id}\n\nYou can now use postMessage with channelId "${result.channel.id}" to send a direct message.`;
-  },
+  parameters: z.object(openDmFields),
+  execute: async (args, { session }) => formatOpenDm(await performOpenDm(getSlackUserClient(session), args)),
 });
 
 // === Read state ===

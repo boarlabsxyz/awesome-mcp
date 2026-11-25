@@ -1395,6 +1395,8 @@ const REST_LARGE_BODY_PREFIXES: ReadonlyArray<string> = [
   // uploadDriveFile: the file itself, base64. A prefix mount, so it also covers
   // the /files/:id/* writes; none of those needs it, but none is harmed by it.
   '/api/v1/drive/files',
+  // createDocument: initialContent can be a whole document body.
+  '/api/v1/drive/documents',
   // batchUpdatePresentation: a whole deck's worth of Slides requests is the
   // point of sending it in one batch. Also covers POST /api/v1/slides.
   '/api/v1/slides',
@@ -5493,6 +5495,62 @@ function registerRestApiRoutes(app: express.Express): void {
     }
   });
 
+  // GET /api/v1/calendars/freebusy - Busy intervals per calendar (queryFreeBusy)
+  // ?calendarIds=a,b (default primary, max 50) &timeMin= &timeMax= &timeZone=.
+  // A calendar Google could not read, or did not return, is `busy: null` with
+  // its reasons in `errors`: unknown, never free. Static path; no
+  // /calendars/:calendarId GET exists for it to be shadowed by, but it sits
+  // ahead of the param routes anyway.
+  app.get('/api/v1/calendars/freebusy', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      // Refused before defaulting: a repeated time parameter arrives as an
+      // array, which qstr would drop to "now"/"+7 days", and calendarIds=,
+      // would fall back to primary. Either way the caller would get
+      // availability for a window or calendar they did not ask about.
+      const repeated = ['timeMin', 'timeMax', 'timeZone']
+        .filter((k) => req.query[k] !== undefined && typeof req.query[k] !== 'string');
+      if (repeated.length) {
+        res.status(400).json({ error: `Query parameter(s) ${repeated.join(', ')} must be given exactly once.` });
+        return;
+      }
+      // Sent but empty (timeMin=) is refused too, not read as omitted: the
+      // caller named a bound, and the default window is not what they asked.
+      const blank = ['timeMin', 'timeMax', 'timeZone'].filter((k) => req.query[k] === '');
+      if (blank.length) {
+        res.status(400).json({ error: `Query parameter(s) ${blank.join(', ')} must not be empty. Omit a parameter to use its default.` });
+        return;
+      }
+      // calendarIds may be comma-separated, repeated, or both
+      // (calendarIds=a,b&calendarIds=c); qarr combines them, and the 50-id
+      // limit applies to the combined list.
+      if (req.query.calendarIds !== undefined && !qarr(req.query.calendarIds)) {
+        res.status(400).json({ error: 'calendarIds is empty. Omit it for the primary calendar, or give comma-separated calendar ids.' });
+        return;
+      }
+      const { queryFreeBusySchema, performQueryFreeBusy } = await import('../google-calendar/server.js');
+      const parsed = queryFreeBusySchema.safeParse({
+        calendarIds: qarr(req.query.calendarIds),
+        timeMin: qstr(req.query.timeMin) || undefined,
+        timeMax: qstr(req.query.timeMax) || undefined,
+        timeZone: qstr(req.query.timeZone) || undefined,
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid query parameters', issues: parsed.error.flatten() });
+        return;
+      }
+      res.json(await performQueryFreeBusy(req.userSession!.googleCalendar, parsed.data));
+    } catch (err: any) {
+      // A window or id-count refusal carries no upstream status; Google's own
+      // 400 (a malformed time zone) does. Both are the caller's to fix.
+      if ((err?.name === 'UserError' && typeof err?.code !== 'number') || err?.code === 400) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      console.error('Error querying free/busy:', err);
+      sendUpstreamError(res, err, { notFound: 'Calendar not found', fallback: 'Failed to query free/busy' });
+    }
+  });
+
   // GET /api/v1/calendars/:calendarId/events - List events
   app.get('/api/v1/calendars/:calendarId/events', requireCalendarApiKey, async (req: ApiAuthenticatedRequest, res) => {
     try {
@@ -5947,6 +6005,63 @@ function registerRestApiRoutes(app: express.Express): void {
         return;
       }
       sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to apply batch update' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/sheets - Add a tab (addSpreadsheetSheet)
+  // 201 with the properties Google reports, so the grid is the one it made.
+  app.post('/api/v1/sheets/:spreadsheetId/sheets', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { addSpreadsheetSheetSchema, performAddSpreadsheetSheet } = await import('../google-sheets/server.js');
+      const parsed = addSpreadsheetSheetSchema.safeParse({ ...req.body, spreadsheetId: req.params.spreadsheetId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const sheet = await performAddSpreadsheetSheet(req.userSession!.googleSheets, parsed.data);
+      res.status(201).json({ spreadsheetId: parsed.data.spreadsheetId, ...sheet });
+    } catch (err: any) {
+      console.error('Error adding sheet:', err);
+      // Google's 400 here is the request (a tab of that name already exists);
+      // 502 is a reply with no sheet in it.
+      if (err?.code === 400 || err?.code === 502) {
+        res.status(err.code).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to add sheet' });
+    }
+  });
+
+  // POST /api/v1/sheets/:spreadsheetId/cells/update-by-field - updateCellByFieldName
+  // Finds the row whose searchColumn equals searchValue and writes newValue
+  // into the column whose row-1 header is fieldName. No matching row is a 404,
+  // an unknown header a 400 listing the headers; neither writes anything.
+  app.post('/api/v1/sheets/:spreadsheetId/cells/update-by-field', requireSheetsApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const { updateCellByFieldNameSchema, performUpdateCellByFieldName } = await import('../google-sheets/server.js');
+      const parsed = updateCellByFieldNameSchema.safeParse({ ...req.body, spreadsheetId: req.params.spreadsheetId });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+        return;
+      }
+      const result = await performUpdateCellByFieldName(req.userSession!.googleSheets, parsed.data);
+      if (!result.success) {
+        const body: Record<string, unknown> = { ...result };
+        delete body.reason;
+        delete body.success;
+        res.status(result.reason === 'valueNotFound' ? 404 : 400).json(body);
+        return;
+      }
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error updating cell by field name:', err);
+      // A refusal the op made (searchColumn not column letters) carries no
+      // upstream status; Google's own 400 does. Both are the caller's to fix.
+      if ((err?.name === 'UserError' && typeof err?.code !== 'number') || err?.code === 400) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      sendUpstreamError(res, err, { notFound: 'Spreadsheet not found', fallback: 'Failed to update cell' });
     }
   });
 
@@ -7476,8 +7591,10 @@ function registerRestApiRoutes(app: express.Express): void {
       const startRow = qint(req.query.startRow, 1, { min: 1 });
       const maxRows = qint(req.query.maxRows, MAX_ROWS, { min: 1, max: MAX_ROWS });
       const endRow = startRow + maxRows - 1;
-      const colRange = `${col}${startRow}:${col}${endRow}`;
-      const range = sheetName ? `${sheetName}!${colRange}` : colRange;
+      // The tab name is quoted like every other range built from one: "Q3 Plan"
+      // and "Bob's" are rejected by Google unquoted.
+      const { columnSearchRange } = await import('../google-sheets/apiHelpers.js');
+      const range = columnSearchRange(col, startRow, endRow, sheetName || undefined);
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId: req.params.spreadsheetId as string,
         range,
@@ -7686,6 +7803,15 @@ function registerRestApiRoutes(app: express.Express): void {
     // bearer as posting. Canvas section delete and whole-canvas replace are
     // not offered on either surface.
     {
+      // Opens the DM or returns the one already open, so 200, not 201. Posts
+      // nothing; like the MCP tool it is not behind SLACK_WRITES_ENABLED.
+      path: '/api/v1/slack/dms',
+      status: 200,
+      fallback: 'Failed to open DM',
+      schema: (m) => m.openDmRestSchema,
+      run: async (m, c, a) => m.performOpenDm(c, a),
+    },
+    {
       path: '/api/v1/slack/channels',
       status: 201,
       fallback: 'Failed to create channel',
@@ -7846,6 +7972,63 @@ function registerRestApiRoutes(app: express.Express): void {
       }
     });
   }
+
+  // findCanvasSections and the file download. Kept out of the read loop above
+  // because their refusals carry a numeric status (no criteria 400, a file not
+  // shared in the channel 403, an external file 422) and an upstream 401 is a
+  // 502 here, which is what slackWriteErrorStatus answers. The bot has no
+  // access rules (src/slack/CLAUDE.md), so the share check is the only guard.
+
+  // GET /api/v1/slack/canvases/:canvasId/sections - Section ids for editCanvas
+  app.get('/api/v1/slack/canvases/:canvasId/sections', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const client = await slackBotClient(req, res);
+      if (!client) return;
+      const ws = await import('../slack/workspaceTools.js');
+      const parsed = ws.findCanvasSectionsQuerySchema.safeParse({
+        containsText: qstr(req.query.containsText) || undefined,
+        sectionTypes: qarr(req.query.sectionTypes),
+      });
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid query parameters', issues: parsed.error.flatten() });
+        return;
+      }
+      res.json(await ws.performFindCanvasSections(client, req.params.canvasId as string, parsed.data));
+    } catch (err: any) {
+      res.status(slackWriteErrorStatus(err)).json({ error: err?.message || 'Failed to find canvas sections' });
+    }
+  });
+
+  // GET /api/v1/slack/files/:fileId/download?channelId= - The file's bytes
+  // Not the tool's url/inline formats: those put a file into a model's context
+  // (one by re-hosting it publicly). A curl wants the bytes, so this streams
+  // them for any type, after the same share check the tool runs.
+  app.get('/api/v1/slack/files/:fileId/download', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
+    try {
+      const channelId = qstr(req.query.channelId);
+      if (!channelId) {
+        res.status(400).json({ error: 'channelId query parameter is required: the channel or DM the file was shared in.' });
+        return;
+      }
+      const client = await slackBotClient(req, res);
+      if (!client) return;
+      const { performDownloadFileBytes } = await import('../slack/helpers.js');
+      const { contentDisposition } = await import('../clickup/attachments.js');
+      const { file, buffer, contentType } = await performDownloadFileBytes(client, {
+        fileId: req.params.fileId as string,
+        channelId,
+      });
+      res.setHeader('Content-Type', contentType);
+      // ASCII fallback plus filename* (RFC 6266): setHeader throws on any
+      // character above U+00FF, so a raw `звіт.pdf` or emoji name would 500
+      // after the whole download.
+      res.setHeader('Content-Disposition', contentDisposition(file.name || file.title || file.id || 'download'));
+      res.setHeader('Content-Length', String(buffer.length));
+      res.send(buffer);
+    } catch (err: any) {
+      res.status(slackWriteErrorStatus(err)).json({ error: err?.message || 'Failed to download file' });
+    }
+  });
 
   // GET /api/v1/slack/users - List workspace users
   app.get('/api/v1/slack/users', requireSlackApiKey, async (req: ApiAuthenticatedRequest, res) => {
@@ -8869,13 +9052,13 @@ function registerRestApiRoutes(app: express.Express): void {
   interface ClickUpWriteRoute {
     /** Express path. Array order IS registration order. */
     path: string;
-    /** 201 where a resource is created; 200 otherwise. */
-    status?: 200 | 201;
+    /** 201 where a resource is created; 200 otherwise. A function when the result decides. */
+    status?: 200 | 201 | ((result: any) => 200 | 201);
     notFound: string;
     fallback: string;
     /** Body schema, picked out of the ops module. Omit for a body-less route. */
     schema?: (m: ClickUpOps) => BodySchema;
-    run: (m: ClickUpOps, client: ClickUpClient, args: any, p: RouteParams) => Promise<unknown>;
+    run: (m: ClickUpOps, client: ClickUpClient, args: any, p: RouteParams, req: ApiAuthenticatedRequest) => Promise<unknown>;
   }
 
   const CLICKUP_WRITE_ROUTES: ReadonlyArray<ClickUpWriteRoute> = [
@@ -8991,6 +9174,18 @@ function registerRestApiRoutes(app: express.Express): void {
       schema: (m) => m.createPageRestSchema,
       run: (m, client, args, p) => m.performCreatePage(client, p.workspaceId, p.docId, args),
     },
+    {
+      // subscribeToTaskEvents. Idempotent per (user, workspace): 201 when a
+      // webhook was created, 200 when the caller already had one. The webhook's
+      // shared secret is stored, never returned (performSubscribeToTaskEvents).
+      path: '/api/v1/clickup/workspaces/:workspaceId/subscription',
+      status: (r) => (r?.kind === 'created' ? 201 : 200),
+      notFound: 'Workspace not found',
+      fallback: 'Failed to subscribe to task events',
+      schema: (m) => m.subscribeToTaskEventsRestSchema,
+      run: (m, client, args, p, req) =>
+        m.performSubscribeToTaskEvents(client, req.userSession!.userId as number, p.workspaceId, args),
+    },
   ];
 
   for (const route of CLICKUP_WRITE_ROUTES) {
@@ -9011,8 +9206,9 @@ function registerRestApiRoutes(app: express.Express): void {
           args = parsed.data;
         }
 
-        const result = await route.run(ops, client, args, req.params as RouteParams);
-        res.status(route.status ?? 200).json(result);
+        const result = await route.run(ops, client, args, req.params as RouteParams, req);
+        const status = typeof route.status === 'function' ? route.status(result) : (route.status ?? 200);
+        res.status(status).json(result);
       } catch (err: any) {
         // ClickUpClient raises a UserError for BOTH kinds of failure, and tags the
         // upstream status under a Symbol that sendUpstreamError cannot read (it
@@ -9726,6 +9922,16 @@ function registerRestApiRoutes(app: express.Express): void {
         ops.performNavigate(proxy, p.sessionId, a, await browserbaseRestRules(req)),
     },
     {
+      // No domain rules here, matching the MCP tool: an action names no
+      // destination, so the rules bind navigate only (src/browserbase/CLAUDE.md).
+      path: '/api/v1/browserbase/sessions/:sessionId/act',
+      method: 'post',
+      notFound: 'Session not found',
+      fallback: 'Failed to perform the action',
+      schema: (m) => m.actRestSchema,
+      run: ({ ops, proxy }, a, p) => ops.performAct(proxy, p.sessionId, a),
+    },
+    {
       path: '/api/v1/browserbase/sessions/:sessionId/observe',
       method: 'post',
       notFound: 'Session not found',
@@ -9806,6 +10012,13 @@ function registerRestApiRoutes(app: express.Express): void {
           res.status(400).json({ error: err.message });
           return;
         }
+        // A start with no readable id: the request was fine and Browserbase
+        // did not deliver, so 502 rather than the 500 sendUpstreamError would
+        // collapse it to.
+        if (err?.status === 502) {
+          res.status(502).json({ error: err.message });
+          return;
+        }
         console.error(`Browserbase request failed (${route.path}):`, err);
         // No status translation needed: BrowserbaseClient sets `.status` on the
         // error, which sendUpstreamError reads directly. ClickUp's symbol-tagged
@@ -9878,6 +10091,39 @@ function registerRestApiRoutes(app: express.Express): void {
       return;
     }
     sendUpstreamError(res, err, opts);
+  }
+
+  // --- HubSpot CRM search ---
+  // POST /api/v1/hubspot/{companies,contacts,deals}/search - searchCompanies,
+  // searchContacts, searchDeals. A read despite the POST: filters are an array
+  // of {propertyName, operator, value} objects that do not fit a query string,
+  // and HubSpot's own search endpoint is a POST. The body is the tool's own
+  // arguments, validated with its field object. Registered BEFORE the
+  // POST /<label>/:id update routes further down, or Express would read
+  // "search" as a record id and run an update.
+  for (const label of ['companies', 'contacts', 'deals'] as const) {
+    app.post(`/api/v1/hubspot/${label}/search`, requireHubSpotApiKey, async (req: ApiAuthenticatedRequest, res) => {
+      try {
+        const client = await hubspotRestClient(req, res);
+        if (!client) return;
+        const hs = await import('../hubspot/server.js');
+        const parsed = hs.searchObjectsRestSchema(label).safeParse(req.body ?? {});
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Invalid request body', issues: parsed.error.flatten() });
+          return;
+        }
+        const { result, properties } = await hs.performSearchObjects(client, label, parsed.data);
+        const helpers = await import('../hubspot/apiHelpers.js');
+        respondNegotiated(req, res, result, () => helpers.formatObjectList(result.results ?? [], label, properties));
+      } catch (err: any) {
+        // No query and no filter: the caller's to fix, and it carries no status.
+        if (err?.name === 'UserError' && typeof err?.code !== 'number') { res.status(400).json({ error: err.message }); return; }
+        console.error(`Error searching HubSpot ${label}:`, err);
+        const status = hubspotPassthroughStatus(err);
+        if (status) { res.status(status).json({ error: err.message || `Failed to search ${label}` }); return; }
+        await sendHubSpotError(req, res, err, { notFound: `${label} not found`, fallback: `Failed to search ${label}` });
+      }
+    });
   }
 
   // --- HubSpot CRM object reads ---

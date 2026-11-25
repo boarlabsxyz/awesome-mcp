@@ -289,6 +289,42 @@ describe('REST data plane: Browserbase handlers', () => {
     assert.equal(res.body.sessionId, 'sess-9');
   });
 
+  it('acts on the page, sending the action and the PATH sessionId upstream', async () => {
+    const calls = mockUpstreams({ toolText: '{"success":true,"data":"clicked Sign in"}' });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/act', { action: 'click Sign in', sessionId: 'other' });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, { sessionId: 'sess-1', result: 'clicked Sign in' });
+    const toolCall = calls.find(c => c.body?.method === 'tools/call');
+    assert.equal(toolCall?.body.params.name, 'act');
+    assert.deepEqual(toolCall?.body.params.arguments, { action: 'click Sign in', sessionId: 'sess-1' });
+  });
+
+  it('refuses an act with no action, before reaching Browserbase', async () => {
+    const calls = mockUpstreams({ toolText: 'x' });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/act', {});
+    assert.equal(res.status, 400);
+    assert.equal(calls.length, 0);
+  });
+
+  it('does not apply domain rules to act, matching the MCP tool (rules bind navigate only)', async () => {
+    // The restricted connection refuses an off-list navigate (403, above) and
+    // still runs an action: an action names no destination to check.
+    mockUpstreams({ toolText: 'done' });
+    const denied = await post('/api/v1/browserbase/sessions/sess-1/navigate', { url: 'https://other.test' }, rulesApiKey);
+    assert.equal(denied.status, 403);
+    const acted = await post('/api/v1/browserbase/sessions/sess-1/act', { action: 'submit the form' }, rulesApiKey);
+    assert.equal(acted.status, 200);
+  });
+
+  it('has no /end route: an authenticated POST is a 404 and reaches no upstream', async () => {
+    // The owner declined REST for end (it always ends in a force release);
+    // MCP_ONLY records the decision and this pins that nothing serves it.
+    const calls = mockUpstreams({ toolText: 'closed', rest: { id: 'sess-1', status: 'REQUEST_RELEASE' } });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
+    assert.equal(res.status, 404);
+    assert.equal(calls.length, 0);
+  });
+
   it('403s for an account with no Browserbase connection', async () => {
     await createOrUpdateUser(
       { email: 'bb-none@example.com', googleId: 'google-bb-none', name: 'BB None' },

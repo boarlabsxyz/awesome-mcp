@@ -17,6 +17,531 @@
     }
   ],
   "paths": {
+    "/api/v1/hubspot/deals/search": {
+      "post": {
+        "operationId": "searchHubSpotDeals",
+        "summary": "Search HubSpot deals by free text and property filters",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Free-text search across the default searchable properties (e.g. dealname)."
+                  },
+                  "filters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "propertyName": {
+                          "type": "string",
+                          "description": "Property to filter on (e.g. domain, email, industry)."
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "EQ",
+                            "NEQ",
+                            "LT",
+                            "LTE",
+                            "GT",
+                            "GTE",
+                            "CONTAINS_TOKEN",
+                            "NOT_CONTAINS_TOKEN",
+                            "HAS_PROPERTY",
+                            "NOT_HAS_PROPERTY"
+                          ],
+                          "default": "EQ",
+                          "description": "Comparison operator (default EQ)."
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY."
+                        }
+                      },
+                      "required": [
+                        "propertyName"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Optional property filters, ANDed together."
+                  },
+                  "properties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Properties to return per match (defaults to dealname, amount, dealstage, pipeline, closedate). Every requested property is rendered \u2014 unset ones as \"(empty)\" \u2014 and any HubSpot does not return is listed in a note."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 10,
+                    "description": "Maximum matches to return (default 10, max 100)."
+                  }
+                },
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "filters"
+                    ],
+                    "properties": {
+                      "filters": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CrmObject"
+                      }
+                    },
+                    "paging": {
+                      "type": "object"
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or neither query nor filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing HubSpot scope (needed and granted scopes are named)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/contacts/search": {
+      "post": {
+        "operationId": "searchHubSpotContacts",
+        "summary": "Search HubSpot contacts by free text and property filters",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Free-text search across the default searchable properties (e.g. name, email, phone)."
+                  },
+                  "filters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "propertyName": {
+                          "type": "string",
+                          "description": "Property to filter on (e.g. domain, email, industry)."
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "EQ",
+                            "NEQ",
+                            "LT",
+                            "LTE",
+                            "GT",
+                            "GTE",
+                            "CONTAINS_TOKEN",
+                            "NOT_CONTAINS_TOKEN",
+                            "HAS_PROPERTY",
+                            "NOT_HAS_PROPERTY"
+                          ],
+                          "default": "EQ",
+                          "description": "Comparison operator (default EQ)."
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY."
+                        }
+                      },
+                      "required": [
+                        "propertyName"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Optional property filters, ANDed together."
+                  },
+                  "properties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Properties to return per match (defaults to firstname, lastname, email, company, phone). Every requested property is rendered \u2014 unset ones as \"(empty)\" \u2014 and any HubSpot does not return is listed in a note."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 10,
+                    "description": "Maximum matches to return (default 10, max 100)."
+                  }
+                },
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "filters"
+                    ],
+                    "properties": {
+                      "filters": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CrmObject"
+                      }
+                    },
+                    "paging": {
+                      "type": "object"
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or neither query nor filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing HubSpot scope (needed and granted scopes are named)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hubspot/companies/search": {
+      "post": {
+        "operationId": "searchHubSpotCompanies",
+        "summary": "Search HubSpot companies by free text and property filters",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "Free-text search across the default searchable properties (e.g. name, domain, phone)."
+                  },
+                  "filters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "propertyName": {
+                          "type": "string",
+                          "description": "Property to filter on (e.g. domain, email, industry)."
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "EQ",
+                            "NEQ",
+                            "LT",
+                            "LTE",
+                            "GT",
+                            "GTE",
+                            "CONTAINS_TOKEN",
+                            "NOT_CONTAINS_TOKEN",
+                            "HAS_PROPERTY",
+                            "NOT_HAS_PROPERTY"
+                          ],
+                          "default": "EQ",
+                          "description": "Comparison operator (default EQ)."
+                        },
+                        "value": {
+                          "type": "string",
+                          "description": "Value to compare against. Omit for HAS_PROPERTY / NOT_HAS_PROPERTY."
+                        }
+                      },
+                      "required": [
+                        "propertyName"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Optional property filters, ANDed together."
+                  },
+                  "properties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Properties to return per match (defaults to name, domain, website, phone, industry). Every requested property is rendered \u2014 unset ones as \"(empty)\" \u2014 and any HubSpot does not return is listed in a note."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 10,
+                    "description": "Maximum matches to return (default 10, max 100)."
+                  }
+                },
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "filters"
+                    ],
+                    "properties": {
+                      "filters": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CrmObject"
+                      }
+                    },
+                    "paging": {
+                      "type": "object"
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or neither query nor filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing HubSpot scope (needed and granted scopes are named)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/hubspot/companies": {
       "get": {
         "operationId": "getHubSpotActiveCompanies",

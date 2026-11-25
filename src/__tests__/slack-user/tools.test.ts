@@ -393,3 +393,23 @@ describe('slack-user event tools require a logged-in user', () => {
     }
   });
 });
+
+describe('slack-user openDm (shares performOpenDm with the bot server and REST)', () => {
+  it('opens the DM with the user token and keeps its text', async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, channel: { id: 'D9' } }), { status: 200 })) as typeof fetch;
+    try {
+      const out = await toolMap.get('openDm').execute({ userId: 'U1' }, { session: { slackUserToken: 'xoxp-test' } });
+      assert.match(out, /^DM channel opened: D9/);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it('refuses both userId and userIds', async () => {
+    await assert.rejects(
+      () => toolMap.get('openDm').execute({ userId: 'U1', userIds: ['U2', 'U3'] }, { session: { slackUserToken: 'xoxp-test' } }),
+      /not both or neither/,
+    );
+  });
+});
