@@ -21,7 +21,23 @@
       "post": {
         "operationId": "searchHubSpotDeals",
         "summary": "Search HubSpot deals by free text and property filters",
-        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -113,6 +129,11 @@
                     }
                   }
                 }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -153,7 +174,23 @@
       "post": {
         "operationId": "searchHubSpotContacts",
         "summary": "Search HubSpot contacts by free text and property filters",
-        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -245,6 +282,11 @@
                     }
                   }
                 }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -285,7 +327,23 @@
       "post": {
         "operationId": "searchHubSpotCompanies",
         "summary": "Search HubSpot companies by free text and property filters",
-        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -376,6 +434,11 @@
                       "type": "object"
                     }
                   }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }

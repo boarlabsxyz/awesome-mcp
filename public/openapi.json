@@ -17,6 +17,253 @@
     }
   ],
   "paths": {
+    "/api/v1/browserbase/sessions/{sessionId}/act": {
+      "post": {
+        "operationId": "actOnBrowserPage",
+        "summary": "Perform one plain-language action on the current page",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Mirrors the MCP tool `act`. It clicks and submits forms on third-party sites with no confirmation step, and the permanent dashboard API key can call it. Domain rules do not apply, as on the MCP tool: an action names no destination, so the rules bind navigate only. The sessionId comes from the path.",
+        "tags": [
+          "browserbase"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The session id returned by POST /api/v1/browserbase/sessions/start."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "What to do on the current page, in plain language — e.g. \"click the Sign in button\", \"type hello@example.com into the email field\". One action per call."
+                  }
+                },
+                "required": [
+                  "action"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the page did, sanitised and size-capped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "result": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or no active session for that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No Browserbase connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/calendars/freebusy": {
+      "get": {
+        "operationId": "queryFreeBusy",
+        "summary": "Busy intervals for one or more calendars in a time range",
+        "description": "Mirrors the MCP tool `queryFreeBusy`. Returns JSON in request order. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free. Each parameter may be given once; a repeated one, or an empty calendarIds, is a 400.",
+        "tags": [
+          "calendar"
+        ],
+        "parameters": [
+          {
+            "name": "calendarIds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated calendar ids or email addresses, at most 50. Omit it for the primary calendar."
+          },
+          {
+            "name": "timeMin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Start of the window, ISO 8601. Defaults to now."
+          },
+          {
+            "name": "timeMax",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "End of the window, ISO 8601, after timeMin. Defaults to 7 days after timeMin."
+          },
+          {
+            "name": "timeZone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "IANA time zone for the response, e.g. Europe/Berlin."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Busy intervals per calendar.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "timeMin": {
+                      "type": "string"
+                    },
+                    "timeMax": {
+                      "type": "string"
+                    },
+                    "timeZone": {
+                      "type": "string"
+                    },
+                    "calendars": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "busy": {
+                            "type": "array",
+                            "nullable": true,
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "start": {
+                                  "type": "string"
+                                },
+                                "end": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "errors": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty or repeated parameter, more than 50 calendars, an unparseable time, or timeMax not after timeMin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Calendar not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/calendars": {
       "get": {
         "operationId": "listCalendars",
@@ -946,7 +1193,7 @@
       "post": {
         "operationId": "subscribeToTaskEvents",
         "summary": "Subscribe to task events for a workspace, creating a ClickUp webhook",
-        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Creates a ClickUp webhook that calls this server back and stores its shared secret, which is never returned. Idempotent per user and workspace: 201 when a webhook was created, 200 with the existing subscription otherwise. Events default to taskCreated, taskStatusUpdated, taskAssigneeUpdated, taskMoved and taskDeleted. 503 when the server has no BASE_URL.",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Creates a ClickUp webhook that calls this server back and stores its shared secret, which is never returned. Idempotent per user and workspace: 201 when a webhook was created, 200 with the existing subscription otherwise, including when a concurrent request created it first. Events default to taskCreated, taskStatusUpdated, taskAssigneeUpdated, taskMoved and taskDeleted. 503 when the server has no BASE_URL.",
         "parameters": [
           {
             "name": "workspaceId",
@@ -1052,7 +1299,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1072,7 +1319,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1082,7 +1329,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1092,7 +1339,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -5814,6 +6061,88 @@
           },
           "503": {
             "description": "Image hosting is not configured on this server (IMAGE_PUBLIC_BASE_URL / DATABASE_URL unset). Not a fault: a config value is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/docs/{documentId}/structure": {
+      "get": {
+        "operationId": "inspectDocStructure",
+        "summary": "Inspect the structure of a Google Doc",
+        "description": "Paragraph, table and section counts, header and footer presence, and the tab hierarchy. Mirrors the MCP tool `inspectDocStructure`. Returns JSON.",
+        "tags": [
+          "docs"
+        ],
+        "parameters": [
+          {
+            "name": "documentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The Google Doc ID."
+          },
+          {
+            "name": "detailed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Pass true for an element-by-element listing; anything else is the summary."
+          },
+          {
+            "name": "tabId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Scope the result to one tab. Defaults to every tab."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The structure summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -17792,7 +18121,23 @@
       "post": {
         "operationId": "searchHubSpotDeals",
         "summary": "Search HubSpot deals by free text and property filters",
-        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -17884,6 +18229,11 @@
                     }
                   }
                 }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -17924,7 +18274,23 @@
       "post": {
         "operationId": "searchHubSpotContacts",
         "summary": "Search HubSpot contacts by free text and property filters",
-        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -18016,6 +18382,11 @@
                     }
                   }
                 }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -18056,7 +18427,23 @@
       "post": {
         "operationId": "searchHubSpotCompanies",
         "summary": "Search HubSpot companies by free text and property filters",
-        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging), or the MCP tool text with ?format=text.",
+        "description": "A read despite the POST: filters are objects that do not fit a query string. Give a query and/or at least one filter (400 otherwise); filters are ANDed. Answers the raw HubSpot search JSON (results, total, paging) by default, or the MCP tool text with ?format=text or Accept: text/plain.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ],
+              "default": "json"
+            },
+            "description": "text for the MCP tool rendering; JSON (the default) otherwise."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -18147,6 +18534,11 @@
                       "type": "object"
                     }
                   }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -35174,7 +35566,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Records for the requested window, as { items, page } — `page` carries total_count, offset and limit. Follow it before treating the list as complete.",
+            "description": "Every custom field definition in one response, as { items, page }. Redmine does not page this endpoint and the route sends no offset or limit, so items is the whole list and page is usually empty.",
             "content": {
               "application/json": {
                 "schema": {
@@ -36022,7 +36414,7 @@
       "post": {
         "operationId": "deleteRedmineVersion",
         "summary": "Permanently delete a Redmine version",
-        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Issues that targeted it are left with no target version. Mirrors the MCP tool `deleteVersion`.",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Redmine refuses (422) to delete a version that issues still target, that a custom field references or that has attachments; reassign or clear those issues target version first, then retry. Mirrors the MCP tool `deleteVersion`.",
         "tags": [
           "redmine"
         ],
@@ -36307,11 +36699,296 @@
         }
       }
     },
+    "/api/v1/sheets/{spreadsheetId}/search": {
+      "get": {
+        "operationId": "findRowByValue",
+        "summary": "Find a row by column value",
+        "description": "The 1-based number of the first row whose cell in column col equals val (exact, as displayed). Scans at most maxRows rows from startRow. Mirrors the MCP tool `findRowByValue`. Returns JSON; found is false when no row matches.",
+        "tags": [
+          "sheets"
+        ],
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          },
+          {
+            "name": "col",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z]+$"
+            },
+            "description": "Column letters to search, e.g. A or AA. A cell reference is refused."
+          },
+          {
+            "name": "val",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The value to match exactly."
+          },
+          {
+            "name": "sheet",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tab name. Defaults to the first tab."
+          },
+          {
+            "name": "startRow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "First row to scan (1-based)."
+          },
+          {
+            "name": "maxRows",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 10000
+            },
+            "description": "Rows to scan from startRow."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The match, or found false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "column": {
+                      "type": "string"
+                    },
+                    "searchValue": {
+                      "type": "string"
+                    },
+                    "sheet": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "startRow": {
+                      "type": "integer"
+                    },
+                    "maxRows": {
+                      "type": "integer"
+                    },
+                    "rowNumber": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "found": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "col or val missing, or col is not column letters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sheets/{spreadsheetId}/ranges": {
+      "get": {
+        "operationId": "readSpreadsheet",
+        "summary": "Read a range from a spreadsheet",
+        "description": "GET sibling of POST /api/v1/sheets/{spreadsheetId}/read. Mirrors the MCP tool `readSpreadsheet`. Returns JSON, or the MCP text rendering with ?format=text or Accept: text/plain.",
+        "tags": [
+          "sheets"
+        ],
+        "parameters": [
+          {
+            "name": "spreadsheetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spreadsheet ID"
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A1 notation, e.g. Sheet1!A1:D10."
+          },
+          {
+            "name": "valueRenderOption",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "FORMATTED_VALUE",
+                "UNFORMATTED_VALUE",
+                "FORMULA"
+              ],
+              "default": "FORMATTED_VALUE"
+            },
+            "description": "FORMATTED_VALUE (the default) as displayed, UNFORMATTED_VALUE for the raw value, FORMULA for the formula text."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "description": "text for the MCP tool rendering; JSON otherwise."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The values in the range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "spreadsheetId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "string"
+                    },
+                    "majorDimension": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {}
+                      }
+                    }
+                  }
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "range missing, or an unknown valueRenderOption",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied by Google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Spreadsheet not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sheets/{spreadsheetId}/cells/update-by-field": {
       "post": {
         "operationId": "updateCellByFieldName",
         "summary": "Find a row by a column value and write one field of it, named by header",
-        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Row 1 holds the headers. Finds the first row whose searchColumn equals searchValue and writes newValue into the column headed fieldName, returning the old value. No matching row is a 404 and an unknown header a 400 with availableHeaders; neither writes anything. updatedCells 1 confirms the write.",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Row 1 holds the headers. Finds the first row whose searchColumn equals searchValue and writes newValue into the column headed fieldName, returning the old value. No matching row is a 404 and an unknown header a 400 with availableHeaders; neither writes anything. searchColumn must be column letters. A sheetName with spaces or apostrophes is quoted for you. updatedCells 1 confirms the write.",
         "parameters": [
           {
             "name": "spreadsheetId",
@@ -36332,7 +37009,8 @@
                 "properties": {
                   "searchColumn": {
                     "type": "string",
-                    "description": "Column letter to search in (e.g., \"A\")."
+                    "description": "Column letters to search in (e.g. \"A\" or \"AA\"). A cell reference such as \"A2\" is refused with 400.",
+                    "pattern": "^[A-Za-z]+$"
                   },
                   "searchValue": {
                     "type": "string",
@@ -36411,7 +37089,7 @@
             }
           },
           "400": {
-            "description": "Invalid request body, or fieldName is not a header (availableHeaders lists them)",
+            "description": "Invalid request body, searchColumn not column letters, or fieldName is not a header (availableHeaders lists them)",
             "content": {
               "application/json": {
                 "schema": {
@@ -37607,6 +38285,347 @@
         }
       }
     },
+    "/api/v1/slack/canvases/{canvasId}/sections": {
+      "get": {
+        "operationId": "findSlackCanvasSections",
+        "summary": "Find section ids in a canvas by text or header type",
+        "description": "Mirrors the MCP tool `findCanvasSections`. Give containsText, sectionTypes or both; neither is a 400. The ids feed POST /api/v1/slack/canvases/{canvasId}/edit. Needs a slack-bot connection.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "canvasId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Canvas id (F...)."
+          },
+          {
+            "name": "containsText",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Sections containing this text."
+          },
+          {
+            "name": "sectionTypes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "h1",
+                  "h2",
+                  "h3",
+                  "any_header"
+                ]
+              }
+            },
+            "description": "Comma-separated header types to match, e.g. h1,h2.",
+            "style": "form",
+            "explode": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching section ids, in Slack order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "canvasId": {
+                      "type": "string"
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither containsText nor sectionTypes, or an unknown header type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No slack-bot connection, or Slack denied the canvas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Canvas not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/slack/files/{fileId}/download": {
+      "get": {
+        "operationId": "downloadSlackFile",
+        "summary": "Download the bytes of a file shared in a channel or DM",
+        "description": "Mirrors the MCP tool `downloadFile`, but always returns the raw file bytes with the file content type and a Content-Disposition naming it, up to 20 MB. The tool url and inline formats are MCP-only. The file must be shared in channelId.",
+        "tags": [
+          "slack"
+        ],
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Slack file id (F...)."
+          },
+          {
+            "name": "channelId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The channel or DM the file was shared in."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file bytes, with the file own content type.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "attachment; filename (ASCII fallback) and filename* (UTF-8)."
+              }
+            },
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "channelId missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No slack-bot connection, the file is not shared in channelId, or the connection lacks files:read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found, or Slack returned no download URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A file hosted outside Slack, or one over 20 MB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/slack/dms": {
+      "post": {
+        "operationId": "openSlackDm",
+        "summary": "Open or retrieve a 1-on-1 or group DM and return its channel id",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Mirrors the MCP tool `openDm`. Give exactly one of userId or userIds. Answers 200 whether the DM was opened now or already existed. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403). Posts nothing, so it is not behind SLACK_WRITES_ENABLED.",
+        "tags": [
+          "slack"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "userId"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "userId": {
+                        "type": "string",
+                        "description": "The Slack user ID to open a 1-on-1 DM with (e.g., U01234ABCDE)."
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "userIds"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "userIds": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 2,
+                        "maxItems": 8,
+                        "description": "Open a group DM with these users (2-8). Give this or userId."
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The DM channel, new or existing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "channelId": {
+                      "type": "string"
+                    },
+                    "users": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "im",
+                        "mpim"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Both or neither of userId and userIds, an unknown key, or userIds outside 2-8",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a minted bearer, or no slack-bot connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/slides": {
       "post": {
         "operationId": "createPresentation",
@@ -37849,7 +38868,7 @@
                   },
                   "requiredRevisionId": {
                     "type": "string",
-                    "description": "Optional revisionId from GET /api/v1/slides/{presentationId}. If the presentation changed since, nothing is written and the response is 409."
+                    "description": "Optional revisionId from GET /api/v1/slides/{presentationId}. If the presentation changed since, nothing is written: the response is 409 when Google names the revision in its error, and 400 when Google words it otherwise."
                   }
                 }
               }
@@ -42628,83 +43647,6 @@
         }
       }
     },
-    "/api/v1/docs/{documentId}/structure": {
-      "get": {
-        "operationId": "inspectDocStructure",
-        "summary": "Inspect the structure of a Google Doc",
-        "description": "Inspect the structure of a Google Doc. Mirrors the MCP tool `inspectDocStructure`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Paragraph/table/section counts, headers and footers presence, tab hierarchy. Pass ?detailed=true for an element-by-element listing, ?tabId= to scope to one tab.",
-        "tags": [
-          "docs"
-        ],
-        "parameters": [
-          {
-            "name": "documentId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/sheets/{spreadsheetId}/ranges": {
-      "get": {
-        "operationId": "readSpreadsheet",
-        "summary": "Read a range from a spreadsheet",
-        "description": "Read a range from a spreadsheet. Mirrors the MCP tool `readSpreadsheet`. Returns upstream JSON by default; pass Accept: text/plain for markdown. GET sibling of the existing POST /api/v1/sheets/{id}/read. Optional valueRenderOption: FORMATTED_VALUE (default), UNFORMATTED_VALUE or FORMULA.",
-        "tags": [
-          "sheets"
-        ],
-        "parameters": [
-          {
-            "name": "spreadsheetId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "range",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Read a range from a spreadsheet (catalog: readSpreadsheet)."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
     "/api/v1/sheets/{spreadsheetId}/rows/{rowNumber}": {
       "get": {
         "operationId": "readRowByField",
@@ -42729,75 +43671,6 @@
             "schema": {
               "type": "string"
             }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/sheets/{spreadsheetId}/search": {
-      "get": {
-        "operationId": "findRowByValue",
-        "summary": "Find a row by column value (?col=&val=)",
-        "description": "Find a row by column value (?col=&val=). Mirrors the MCP tool `findRowByValue`. Returns upstream JSON by default; pass Accept: text/plain for markdown.",
-        "tags": [
-          "sheets"
-        ],
-        "parameters": [
-          {
-            "name": "spreadsheetId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/calendars/freebusy": {
-      "get": {
-        "operationId": "queryFreeBusy",
-        "summary": "Busy intervals for one or more calendars in a time range",
-        "description": "Busy intervals for one or more calendars in a time range. Mirrors the MCP tool `queryFreeBusy`. Returns upstream JSON by default; pass Accept: text/plain for markdown. calendarIds is comma-separated (calendar ids or email addresses), default primary, max 50. Optional timeMin (default now), timeMax (default 7 days later) and timeZone. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free.",
-        "tags": [
-          "calendar"
-        ],
-        "parameters": [
-          {
-            "name": "calendarIds",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Busy intervals for one or more calendars in a time range (catalog: queryFreeBusy)."
           }
         ],
         "responses": {
@@ -43623,83 +44496,6 @@
         }
       }
     },
-    "/api/v1/slack/canvases/{canvasId}/sections": {
-      "get": {
-        "operationId": "findSlackCanvasSections",
-        "summary": "Find section ids in a canvas by text or header type",
-        "description": "Find section ids in a canvas by text or header type. Mirrors the MCP tool `findCanvasSections`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Query: containsText and/or sectionTypes (comma-separated h1, h2, h3, any_header); neither is a 400. The ids feed POST /api/v1/slack/canvases/{canvasId}/edit.",
-        "tags": [
-          "slack"
-        ],
-        "parameters": [
-          {
-            "name": "canvasId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/slack/files/{fileId}/download": {
-      "get": {
-        "operationId": "downloadSlackFile",
-        "summary": "Download the bytes of a file shared in a channel or DM",
-        "description": "Download the bytes of a file shared in a channel or DM. Mirrors the MCP tool `downloadFile`. Returns upstream JSON by default; pass Accept: text/plain for markdown. Streams the raw bytes with the file Content-Type, up to 20 MB. channelId is required and the file must be shared there, else 403. A file hosted outside Slack, or one over the cap, is a 422.",
-        "tags": [
-          "slack"
-        ],
-        "parameters": [
-          {
-            "name": "fileId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "channelId",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Download the bytes of a file shared in a channel or DM (catalog: downloadSlackFile)."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success (raw upstream JSON or rendered text)"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          }
-        }
-      }
-    },
     "/api/v1/slack/lists/{listId}/items": {
       "get": {
         "operationId": "listSlackListItems",
@@ -43807,33 +44603,6 @@
           },
           "404": {
             "description": "Resource not found"
-          }
-        }
-      }
-    },
-    "/api/v1/slack/dms": {
-      "post": {
-        "operationId": "openSlackDm",
-        "summary": "Open or retrieve a 1-on-1 or group DM and return its channel id",
-        "description": "Open or retrieve a 1-on-1 or group DM and return its channel id. Mirrors the MCP tool `openDm`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Body { userId } or { userIds } (2-8), exactly one of them. 200 either way: Slack returns the DM when it is already open. Posts nothing, so not behind SLACK_WRITES_ENABLED. Accepts only the 5-minute bearer from mintRestBearerForCurl, never the permanent dashboard API key (403), like the other Slack writes.",
-        "tags": [
-          "slack"
-        ],
-        "responses": {
-          "400": {
-            "description": "Invalid request body"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          },
-          "2XX": {
-            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
           }
         }
       }
@@ -44242,43 +45011,6 @@
         }
       }
     },
-    "/api/v1/browserbase/sessions/{sessionId}/act": {
-      "post": {
-        "operationId": "actOnBrowserPage",
-        "summary": "Perform one plain-language action on the current page",
-        "description": "Perform one plain-language action on the current page. Mirrors the MCP tool `act`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Body { action }. It clicks and submits forms on third-party sites with no confirmation step, and the permanent dashboard API key can call it. Domain rules do not apply, as on the MCP tool: an action names no destination, so the rules bind navigate only.",
-        "tags": [
-          "browserbase"
-        ],
-        "parameters": [
-          {
-            "name": "sessionId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "400": {
-            "description": "Invalid request body"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          },
-          "2XX": {
-            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
-          }
-        }
-      }
-    },
     "/api/v1/browserbase/sessions/{sessionId}/observe": {
       "post": {
         "operationId": "observeBrowserPage",
@@ -44389,43 +45121,6 @@
           }
         }
       }
-    },
-    "/api/v1/browserbase/sessions/{sessionId}/end": {
-      "post": {
-        "operationId": "endBrowserSession",
-        "summary": "Close a browser session cleanly so it stops billing",
-        "description": "Close a browser session cleanly so it stops billing. Mirrors the MCP tool `end`. Takes a JSON body and returns JSON. Shipped on the owner request for full REST coverage of non-destructive writes. Always ends in a force release, like /release: the hosted end runs first and the REST release is then always sent, alone when the hosted call fails (closedVia release), so anything in progress in that browser is lost. billingStopped is true once a release was accepted and null when only the hosted end succeeded. Both failing is a 502.",
-        "tags": [
-          "browserbase"
-        ],
-        "parameters": [
-          {
-            "name": "sessionId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "400": {
-            "description": "Invalid request body"
-          },
-          "401": {
-            "description": "Missing or invalid bearer token"
-          },
-          "403": {
-            "description": "Permission denied"
-          },
-          "404": {
-            "description": "Resource not found"
-          },
-          "2XX": {
-            "description": "Success (JSON): 201 when the call creates something, 200 otherwise"
-          }
-        }
-      }
     }
   },
   "components": {
@@ -44437,6 +45132,15 @@
       }
     },
     "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
+      },
       "Calendar": {
         "type": "object",
         "properties": {
@@ -44548,15 +45252,6 @@
           "responseStatus": {
             "type": "string",
             "description": "Attendance response (needsAction, declined, tentative, accepted)"
-          }
-        }
-      },
-      "Error": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string",
-            "description": "Error message"
           }
         }
       },

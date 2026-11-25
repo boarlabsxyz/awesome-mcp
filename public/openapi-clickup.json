@@ -21,7 +21,7 @@
       "post": {
         "operationId": "subscribeToTaskEvents",
         "summary": "Subscribe to task events for a workspace, creating a ClickUp webhook",
-        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Creates a ClickUp webhook that calls this server back and stores its shared secret, which is never returned. Idempotent per user and workspace: 201 when a webhook was created, 200 with the existing subscription otherwise. Events default to taskCreated, taskStatusUpdated, taskAssigneeUpdated, taskMoved and taskDeleted. 503 when the server has no BASE_URL.",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Creates a ClickUp webhook that calls this server back and stores its shared secret, which is never returned. Idempotent per user and workspace: 201 when a webhook was created, 200 with the existing subscription otherwise, including when a concurrent request created it first. Events default to taskCreated, taskStatusUpdated, taskAssigneeUpdated, taskMoved and taskDeleted. 503 when the server has no BASE_URL.",
         "parameters": [
           {
             "name": "workspaceId",
@@ -127,7 +127,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -147,7 +147,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -157,7 +157,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -167,7 +167,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }

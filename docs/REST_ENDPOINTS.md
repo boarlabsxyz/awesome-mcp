@@ -436,7 +436,7 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `deleteWikiPage` | `POST /api/v1/redmine/projects/{projectId}/wiki/{title}/delete` | live | Permanently delete a Redmine wiki page — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Takes every revision of the page; child pages move to its parent._ |
 | `createVersion` | `POST /api/v1/redmine/projects/{projectId}/versions` | live | Create a Redmine version — _201 with the created version. Body limit 5mb._ |
 | `updateVersion` | `POST /api/v1/redmine/versions/{versionId}` | live | Update a Redmine version — _POST rather than PUT because the catalog scope is GET and POST. Returns 200 with the version re-read from Redmine. 400 when no field is given._ |
-| `deleteVersion` | `POST /api/v1/redmine/versions/{versionId}/delete` | live | Permanently delete a Redmine version — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Issues that targeted it are left with no target version._ |
+| `deleteVersion` | `POST /api/v1/redmine/versions/{versionId}/delete` | live | Permanently delete a Redmine version — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Redmine refuses (422) to delete a version that issues still target, that a custom field references or that has attachments; reassign or clear those issues target version first, then retry._ |
 | `createIssueCategory` | `POST /api/v1/redmine/projects/{projectId}/issue-categories` | live | Create a Redmine issue category — _201 with the created category. Body limit 5mb._ |
 | `deleteIssueCategory` | `POST /api/v1/redmine/issue-categories/{categoryId}/delete` | live | Permanently delete a Redmine issue category — _DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Pass reassignToId to move its issues to another category, or they are left with none._ |
 | `createMembership` | `POST /api/v1/redmine/projects/{projectId}/memberships` | live | Add a user or group to a Redmine project — _201 with the created membership. Grants the given roles, so this widens who can reach the project._ |
@@ -454,7 +454,6 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 | `observe` | `POST /api/v1/browserbase/sessions/{sessionId}/observe` | live | Find actionable elements on the current page — _Body: { instruction }._ |
 | `extract` | `POST /api/v1/browserbase/sessions/{sessionId}/extract` | live | Extract data or text from the current page — _Body: { instruction } - optional; omit it for the page text._ |
 | `forceEndBrowserSession` | `POST /api/v1/browserbase/sessions/{sessionId}/release` | live | Force a Browserbase session to close so it stops billing — _DESTRUCTIVE - anything in progress in that browser is lost, and there is no undo. Exposed with explicit user sign-off: a curl has no confirmation affordance and the permanent dashboard API key is accepted here. It is also the only way to stop a session whose id outlived the conversation that made it, which is why withholding it would cost more than it saves._ |
-| `end` | `POST /api/v1/browserbase/sessions/{sessionId}/end` | live | Close a browser session cleanly so it stops billing — _Shipped on the owner request for full REST coverage of non-destructive writes. Always ends in a force release, like /release: the hosted end runs first and the REST release is then always sent, alone when the hosted call fails (closedVia release), so anything in progress in that browser is lost. billingStopped is true once a release was accepted and null when only the hosted end succeeded. Both failing is a 502._ |
 
 ### GitHub (`github`)
 
@@ -555,4 +554,4 @@ OpenAPI spec: `https://awesome-mcp.xyz/openapi.json`
 - **live** — endpoint is currently wired and reachable.
 - **planned** — endpoint is in the catalog and on the roadmap; not yet served by the Express app. Calls return 404 until shipped.
 
-Catalog size: 431 endpoints.
+Catalog size: 430 endpoints.

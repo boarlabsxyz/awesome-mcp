@@ -41,6 +41,8 @@ const SERVICE_PREFIX = {
   'openapi-pinecone.json': 'Pinecone',
   'openapi-supabase.json': 'Supabase',
   'openapi-storage.json': 'Storage',
+  'openapi-slack.json': 'Slack',
+  'openapi-browserbase.json': 'Browserbase',
 };
 
 const SHARED_SCHEMAS = new Set(['Error']);

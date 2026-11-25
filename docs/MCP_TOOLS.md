@@ -567,7 +567,7 @@ Source: `src/redmine/server.ts` — 46 tools.
 | `getVersion` | Retrieve one Redmine version by ID. | `GET /api/v1/redmine/versions/{versionId}` |
 | `createVersion` | Create a version (milestone / target release) in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/versions` |
 | `updateVersion` | Update a Redmine version. Fields you omit are left untouched. | `POST /api/v1/redmine/versions/{versionId}` |
-| `deleteVersion` | Permanently delete a Redmine version. Issues targeting it are not deleted — their target version is cleared. | `POST /api/v1/redmine/versions/{versionId}/delete` |
+| `deleteVersion` | Permanently delete a Redmine version. Redmine refuses (422) while any issue still targets it, a custom field references it or it has attachments: reassign or clear those issues' target version first. | `POST /api/v1/redmine/versions/{versionId}/delete` |
 | `listIssueCategories` | List the issue categories defined on a Redmine project. Their IDs are what createIssue/updateIssue take as categoryId. | `GET /api/v1/redmine/projects/{projectId}/issue-categories` |
 | `createIssueCategory` | Create an issue category in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/issue-categories` |
 | `deleteIssueCategory` | Delete a Redmine issue category. Issues in it are not deleted — pass reassignToId to move them to another category, otherwise their category is cleared. | `POST /api/v1/redmine/issue-categories/{categoryId}/delete` |
@@ -588,7 +588,7 @@ Source: `src/browserbase/server.ts` — 9 tools.
 | Tool | Description | REST |
 |---|---|---|
 | `start` | Start a cloud browser session (or reattach to an existing one) and return its sessionId. Call this first. The returned sessionId must be passed to every following browser call — navigate, act, observe, extract and end — because each call reaches Browserbase independently and there is no remembered "current" session. The session bills until end is called or it hits its timeout, so end it when the task is done. | `POST /api/v1/browserbase/sessions/start` |
-| `end` | Close a browser session so it stops billing. Pass the sessionId returned by start. If the browser-control call fails, this falls back to releasing the session through the Browserbase REST API and says which path closed it. | `POST /api/v1/browserbase/sessions/{sessionId}/end` |
+| `end` | Close a browser session so it stops billing. Pass the sessionId returned by start. If the browser-control call fails, this falls back to releasing the session through the Browserbase REST API and says which path closed it. | — |
 | `navigate` | Open a URL in the browser session. Pass the sessionId returned by start. If this connection has domain rules configured on the dashboard, they are enforced here — navigate is the only tool that can enforce them, since it is the only one that names a destination. | `POST /api/v1/browserbase/sessions/{sessionId}/navigate` |
 | `act` | Perform one action on the current page using plain language — click a button, fill a field, submit a form. Pass the sessionId returned by start. Note this can follow a link to any site: a configured domain allowlist applies to navigate only and does not constrain where an action may lead. | `POST /api/v1/browserbase/sessions/{sessionId}/act` |
 | `observe` | Find the actionable elements on the current page matching an instruction — use it to discover what can be clicked or filled before calling act. Pass the sessionId returned by start. | `POST /api/v1/browserbase/sessions/{sessionId}/observe` |

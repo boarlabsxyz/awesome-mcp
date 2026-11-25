@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Storage MCP REST API",
-    "description": "REST data plane for the Storage MCP: per-user collections with enforced schemas. It exists so a script (for example in the Sandbox MCP) can read, query and bulk-write records without them crossing the LLM context window. Every request is validated with the MCP tools own Zod schemas and runs the same operations, so the two surfaces cannot drift. Data is the callers own: a bearer reaches only the records of the user it was minted for. Writes are insert and update only; deleting records, migrating and dropping collections stay MCP-only.",
+    "description": "REST data plane for the Storage MCP: per-user collections with enforced schemas. It exists so a script (for example in the Sandbox MCP) can read, query and bulk-write records without them crossing the LLM context window. Every request is validated with the MCP tools own Zod schemas and runs the same operations, so the two surfaces cannot drift. Data is the callers own: a bearer reaches only the records of the user it was minted for. Writes are createCollection, insert and update; deleting records, migrating and dropping collections stay MCP-only.",
     "version": "1.0.0"
   },
   "servers": [

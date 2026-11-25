@@ -259,7 +259,7 @@
                   },
                   "requiredRevisionId": {
                     "type": "string",
-                    "description": "Optional revisionId from GET /api/v1/slides/{presentationId}. If the presentation changed since, nothing is written and the response is 409."
+                    "description": "Optional revisionId from GET /api/v1/slides/{presentationId}. If the presentation changed since, nothing is written: the response is 409 when Google names the revision in its error, and 400 when Google words it otherwise."
                   }
                 }
               }
