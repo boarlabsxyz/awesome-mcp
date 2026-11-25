@@ -92,6 +92,12 @@ describe('restCatalog', () => {
       assert.ok(hint!.includes('mintRestBearerForCurl'));
     });
 
+    it('names every route of a tool that has more than one', () => {
+      const hint = restHintForTool('listLists');
+      assert.ok(hint!.includes('GET /api/v1/clickup/folders/{folderId}/lists'));
+      assert.ok(hint!.includes('GET /api/v1/clickup/spaces/{spaceId}/lists'));
+    });
+
     it('returns null for an unknown tool', () => {
       assert.equal(restHintForTool('definitelyNotATool'), null);
     });

@@ -14,12 +14,12 @@ Every tool the LLM can call via MCP, grouped by service. The **REST** column sho
 - [Gmail](#gmail) (18)
 - [Google Slides](#google-slides) (6)
 - [ClickUp](#clickup) (49)
-- [Slack (bot)](#slack-bot-) (9)
-- [Slack (user)](#slack-user-) (21)
+- [Slack (bot)](#slack-bot-) (25)
+- [Slack (user)](#slack-user-) (37)
 - [Outline](#outline) (43)
 - [PeopleForce](#peopleforce) (50)
 - [PeopleForce v4](#peopleforce-v4) (46)
-- [HubSpot](#hubspot) (34)
+- [HubSpot](#hubspot) (40)
 - [Redmine](#redmine) (46)
 - [Browserbase](#browserbase) (9)
 - [GitHub](#github) (27)
@@ -199,7 +199,7 @@ Source: `src/clickup/server.ts` — 49 tools.
 | `listWorkspaces` | List all accessible ClickUp workspaces (teams). Returns workspace IDs needed for other operations. | `GET /api/v1/clickup/workspaces` |
 | `listSpaces` | List all spaces in a ClickUp workspace. | `GET /api/v1/clickup/workspaces/{workspaceId}/spaces` |
 | `listFolders` | List all folders in a ClickUp space. | `GET /api/v1/clickup/spaces/{spaceId}/folders` |
-| `listLists` | List all lists in a ClickUp folder, or folderless lists in a space. Provide either folderId or spaceId. | — |
+| `listLists` | List all lists in a ClickUp folder, or folderless lists in a space. Provide either folderId or spaceId. | `GET /api/v1/clickup/folders/{folderId}/lists` |
 | `getTask` | Get detailed information about a specific ClickUp task by its ID. Returns the FULL, untruncated description — use this (not the list tools, which show a bounded preview) when you need to read a ticket in full to summarize it, reuse it as a template, or check acceptance criteria. Reports Parent (and Top-level parent when nesting is deeper than one level) when the task is a subtask. ClickUp returns those as bare task IDs with no name — that is the payload, not missing data; call getTask on the parent ID if you need its name. Reports Task type when the task is not a plain Task; listTaskTypes resolves that number to a name. Custom Fields listed are only those applying to this task's type — ClickUp omits the others even when a value is stored, so a field missing here is NOT evidence it is empty; getAccessibleCustomFields shows which task types each field applies to. | `GET /api/v1/clickup/tasks/{taskId}` |
 | `listTasks` | List tasks in a ClickUp list with optional filters. To query tasks closed within a window, set closedAfter and/or closedBefore — the tool then forces include_closed, auto-paginates up to 2000 tasks, and filters locally on date_closed (ClickUp's REST API has no server-side close-date filter). Each task reports its Parent ID when it is a subtask, so a hierarchy can be rebuilt from one call instead of a getTask per node; match that ID against the IDs already in this response rather than looking each one up (ClickUp includes no parent name). Set subtasks=true or children are omitted entirely. Tasks shared into this list from another home list (Tasks in Multiple Lists) ARE included by default — their List: line names their home list, not this one; set includeMultiListTasks=false for only the tasks that live here. | `GET /api/v1/clickup/lists/{listId}/tasks` |
 | `createTask` | Create a new task in a ClickUp list. | `POST /api/v1/clickup/lists/{listId}/tasks` |
@@ -247,7 +247,7 @@ Source: `src/clickup/server.ts` — 49 tools.
 
 ## Slack (bot)
 
-Source: `src/slack/server.ts` — 9 tools.
+Source: `src/slack/server.ts`, `src/slack/workspaceTools.ts` — 25 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -260,10 +260,26 @@ Source: `src/slack/server.ts` — 9 tools.
 | `editMessage` | Edit a message this bot posted, replacing its content. A bot token can only edit the bot's own messages — Slack refuses anything else. Pass markdownText or blocks to convert a message that was posted as plain text into one with real bullet or numbered lists. WARNING: passing only text on a message that currently has blocks REMOVES those blocks (Slack's own replacement rule), so to keep rendered content re-send it. Get the ts from readChannelHistory or readThreadReplies. | `POST /api/v1/slack/channels/{channelId}/messages/{ts}/edit` |
 | `listUsers` | List workspace members. Use this to find a user by name and get their user ID for opening a DM. | `GET /api/v1/slack/users` |
 | `openDm` | Open (or retrieve) a DM: 1-on-1 with userId, or a group DM with userIds (2-8 people). Returns the channel ID to use with postMessage. | — |
+| `createChannel` | Creates a public or private Slack channel. Returns its ID. | `POST /api/v1/slack/channels` |
+| `addReaction` | Adds an emoji reaction to a message. | `POST /api/v1/slack/channels/{channelId}/messages/{ts}/reactions` |
+| `getUserProfile` | Gets a Slack user's full profile: name, title, status, time zone, email (with users:read.email) and custom fields. | `GET /api/v1/slack/users/{userId}` |
+| `listChannelMembers` | Lists the user IDs in a channel, paginated. Resolve names with getUserProfile or listUsers. | `GET /api/v1/slack/channels/{channelId}/members` |
+| `uploadFile` | Uploads a file (base64 or text, up to 20 MB) and optionally shares it in a channel or thread. Without channelId the file stays private. | `POST /api/v1/slack/files` |
+| `scheduleMessage` | Schedules a message (or thread reply) for later delivery, up to 120 days ahead. Returns the scheduled message ID. | `POST /api/v1/slack/channels/{channelId}/scheduled-messages` |
+| `createCanvas` | Creates a Slack canvas from markdown: standalone, or as a channel's canvas when channelId is given. | `POST /api/v1/slack/canvases` |
+| `getCanvasContent` | Reads a whole canvas as markdown (default) or HTML. | `GET /api/v1/slack/canvases/{canvasId}` |
+| `findCanvasSections` | Finds section IDs in a canvas (by text or header type), for editCanvas insert_before/insert_after/replace_section. | — |
+| `editCanvas` | Edits a canvas: insert markdown at the start/end or around a section, replace one section, or rename it. Deleting is not offered. | `POST /api/v1/slack/canvases/{canvasId}/edit` |
+| `createList` | Creates a Slack List (paid workspaces). todoMode adds completed/assignee/due-date columns. | `POST /api/v1/slack/lists` |
+| `updateList` | Renames a Slack List, replaces its description, or turns todo mode on or off (paid workspaces). Pass at least one. The new name is checked on re-read; description and todo mode are reported unconfirmed, because Slack does not read them back. | `POST /api/v1/slack/lists/{listId}/update` |
+| `getListItems` | Reads the records of a Slack List, with its column schema when includeList is true. Paginated. | `GET /api/v1/slack/lists/{listId}/items` |
+| `getListItem` | Reads one record of a Slack List with all its fields. | `GET /api/v1/slack/lists/{listId}/items/{itemId}` |
+| `createListItem` | Adds a record to a Slack List. Each field names its column and one typed value. | `POST /api/v1/slack/lists/{listId}/items` |
+| `updateListItem` | Updates fields of a record in a Slack List. Only the columns named change. | `POST /api/v1/slack/lists/{listId}/items/{itemId}/update` |
 
 ## Slack (user)
 
-Source: `src/slack-user/server.ts` — 21 tools.
+Source: `src/slack-user/server.ts`, `src/slack/workspaceTools.ts` — 37 tools.
 
 | Tool | Description | REST |
 |---|---|---|
@@ -288,6 +304,22 @@ Source: `src/slack-user/server.ts` — 21 tools.
 | `debugChannelEventSubscription` | Diagnose a channel-event subscription that reports success but is not accruing events. Reports the local record, whether SLACK_SIGNING_SECRET is configured, the Request URL the Slack app must be pointed at, which per-channel-type event subscription (message.channels / message.groups / message.im / message.mpim) this channel needs enabled on the Slack app, whether you are a member of the channel, event-store counts, and — decisively — whether Slack has ever POSTed to this deployment at all and how those deliveries ended. That last part separates "the Request URL is not configured" from "deliveries arrive but nothing matched". Use when getChannelEventHistory stays empty. | — |
 | `unsubscribeFromChannelEvents` | Delete your channel-event subscription for a Slack channel. This also deletes the events captured for it, so history cannot be recovered by re-subscribing — a fresh subscription starts accruing from that moment. Nothing changes on Slack's side: event delivery is configured on the app, so other subscribers keep receiving events. | — |
 | `diagnoseChannelAccess` | Explain why a Slack channel is or is not readable under your access rules. Use this when a channel you expect is missing from listChannels, or when a read is denied and you want to know which rule caused it and how to fix it. Pass channelId when you have it (fastest); otherwise pass name. Returns the deciding rule and your current configuration — never message content. | — |
+| `createChannel` | Creates a public or private Slack channel. Returns its ID. | — |
+| `addReaction` | Adds an emoji reaction to a message. | — |
+| `getUserProfile` | Gets a Slack user's full profile: name, title, status, time zone, email (with users:read.email) and custom fields. | — |
+| `listChannelMembers` | Lists the user IDs in a channel, paginated. Resolve names with getUserProfile or listUsers. | — |
+| `uploadFile` | Uploads a file (base64 or text, up to 20 MB) and optionally shares it in a channel or thread. Without channelId the file stays private. | — |
+| `scheduleMessage` | Schedules a message (or thread reply) for later delivery, up to 120 days ahead. Returns the scheduled message ID. | — |
+| `createCanvas` | Creates a Slack canvas from markdown: standalone, or as a channel's canvas when channelId is given. | — |
+| `getCanvasContent` | Reads a whole canvas as markdown (default) or HTML. | — |
+| `findCanvasSections` | Finds section IDs in a canvas (by text or header type), for editCanvas insert_before/insert_after/replace_section. | — |
+| `editCanvas` | Edits a canvas: insert markdown at the start/end or around a section, replace one section, or rename it. Deleting is not offered. | — |
+| `createList` | Creates a Slack List (paid workspaces). todoMode adds completed/assignee/due-date columns. | — |
+| `updateList` | Renames a Slack List, replaces its description, or turns todo mode on or off (paid workspaces). Pass at least one. The new name is checked on re-read; description and todo mode are reported unconfirmed, because Slack does not read them back. | — |
+| `getListItems` | Reads the records of a Slack List, with its column schema when includeList is true. Paginated. | — |
+| `getListItem` | Reads one record of a Slack List with all its fields. | — |
+| `createListItem` | Adds a record to a Slack List. Each field names its column and one typed value. | — |
+| `updateListItem` | Updates fields of a record in a Slack List. Only the columns named change. | — |
 
 ## Outline
 
@@ -451,17 +483,23 @@ Source: `src/peopleforce-v4/server.ts` — 46 tools.
 
 ## HubSpot
 
-Source: `src/hubspot/server.ts` — 34 tools.
+Source: `src/hubspot/server.ts` — 40 tools.
 
 | Tool | Description | REST |
 |---|---|---|
 | `createCompany` | Create a new company in HubSpot (skips creation if a company with the same name already exists). | `POST /api/v1/hubspot/companies` |
+| `getActiveCompanies` | Description composed by a registration helper; see the source. | `GET /api/v1/hubspot/companies` |
+| `searchCompanies` | Description composed by a registration helper; see the source. | — |
 | `getCompany` | Get a specific company by ID from HubSpot. | `GET /api/v1/hubspot/companies/{companyId}` |
 | `updateCompany` | Update an existing company record in HubSpot. | `POST /api/v1/hubspot/companies/{companyId}` |
 | `getCompanyActivity` | Get activity/engagement history (notes, emails, calls, meetings, tasks) for a specific company. | `GET /api/v1/hubspot/companies/{companyId}/activity` |
 | `createContact` | Create a new contact in HubSpot (skips creation if a matching contact already exists). | `POST /api/v1/hubspot/contacts` |
+| `getActiveContacts` | Description composed by a registration helper; see the source. | `GET /api/v1/hubspot/contacts` |
+| `searchContacts` | Description composed by a registration helper; see the source. | — |
 | `getContact` | Get a specific contact by ID from HubSpot. | `GET /api/v1/hubspot/contacts/{contactId}` |
 | `updateContact` | Update an existing contact record in HubSpot. | `POST /api/v1/hubspot/contacts/{contactId}` |
+| `getActiveDeals` | Description composed by a registration helper; see the source. | `GET /api/v1/hubspot/deals` |
+| `searchDeals` | Description composed by a registration helper; see the source. | — |
 | `getCompanyDeals` | List the deals associated with a company, with amount, stage, pipeline, and close date. Use this to go from a company ID to its deal IDs — getDeal needs an ID no other tool returns. | `GET /api/v1/hubspot/companies/{companyId}/deals` |
 | `getDeal` | Get a specific deal by ID from HubSpot. | `GET /api/v1/hubspot/deals/{dealId}` |
 | `createDeal` | Create a new deal in HubSpot. Set dealstage/pipeline via properties (use listPipelines to resolve stage IDs). | `POST /api/v1/hubspot/deals` |
@@ -700,4 +738,4 @@ Source: `src/sandbox/server.ts` — 6 tools.
 
 ---
 
-**Grand total: 515 tools across 22 sections.**
+**Grand total: 553 tools across 22 sections.**

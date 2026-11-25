@@ -81,6 +81,15 @@ If the new tool isn't fully implemented (e.g. you scaffolded params + executes a
 
 Do not bump any tool count — `docs/MCP_TOOLS.md` is generated and authoritative. If the tool has a limitation, an upstream quirk, or a guard someone could undo by accident, add one terse bullet to the provider's nested `src/<provider>/CLAUDE.md` (create it if absent, and add it to the index in the root `CLAUDE.md`): the rule plus a one-clause reason. Keep investigation history out of it — that belongs in the commit message. Only a rule that applies across services goes in the root `CLAUDE.md`.
 
+### 8b. Make the REST decision (required when the server has a REST plane)
+
+`src/__tests__/mcpToolsRestCoverage.test.ts` fails on a tool that has neither a `src/restCatalog.ts` entry nor a line in its `MCP_ONLY` map. Skip this step only for servers in that file's `NO_REST_PLANE` list.
+
+- **A read tool:** it gets an endpoint. Follow `../add-rest-endpoint/SKILL.md` with `<toolName>`.
+- **A write tool:** it gets an endpoint only when the `src/restCatalog.ts` header's bar is met (a large body, or a shell-pipeline use), and a destructive one also needs sign-off recorded in the catalog notes. Otherwise add `<toolName>: '<reason>'` to `MCP_ONLY.<service>` in that test.
+
+When unsure which, ask the user one question. Do not leave the tool undecided: CI fails.
+
 ### 9. Offer the two follow-ups
 
 End the procedure with:

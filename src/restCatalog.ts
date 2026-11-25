@@ -196,8 +196,8 @@ export const REST_CATALOG: ReadonlyArray<RestEndpoint> = [
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces', summary: 'List ClickUp workspaces', mcpToolName: 'listWorkspaces', openapiOperationId: 'listWorkspaces', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/workspaces/{workspaceId}/spaces', summary: 'List spaces in a workspace', mcpToolName: 'listSpaces', openapiOperationId: 'listSpaces', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/spaces/{spaceId}/folders', summary: 'List folders in a space', mcpToolName: 'listFolders', openapiOperationId: 'listFolders', status: 'live' },
-  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/folders/{folderId}/lists', summary: 'List lists in a folder', mcpToolName: 'listListsInFolder', openapiOperationId: 'listListsInFolder', status: 'live' },
-  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/spaces/{spaceId}/lists', summary: 'List folderless lists in a space', mcpToolName: 'listFolderlessLists', openapiOperationId: 'listFolderlessLists', status: 'live' },
+  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/folders/{folderId}/lists', summary: 'List lists in a folder', mcpToolName: 'listLists', openapiOperationId: 'listListsInFolder', status: 'live' },
+  { service: 'clickup', method: 'GET', path: '/api/v1/clickup/spaces/{spaceId}/lists', summary: 'List folderless lists in a space', mcpToolName: 'listLists', openapiOperationId: 'listFolderlessLists', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/lists/{listId}/tasks', summary: 'List tasks in a list', mcpToolName: 'listTasks', openapiOperationId: 'listTasks', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/tasks/{taskId}', summary: 'Get a ClickUp task (JSON or markdown via Accept)', mcpToolName: 'getTask', openapiOperationId: 'getTask', status: 'live' },
   { service: 'clickup', method: 'GET', path: '/api/v1/clickup/lists/{listId}/fields', summary: 'List accessible custom fields on a list', mcpToolName: 'getAccessibleCustomFields', openapiOperationId: 'getAccessibleCustomFields', status: 'live' },
@@ -623,6 +623,8 @@ export function endpointsForService(service: RestService): RestEndpoint[] {
 export function restHintForTool(mcpToolName: string): string | null {
   const eps = endpointsForTool(mcpToolName);
   if (eps.length === 0) return null;
-  const ep = eps[0];
-  return `REST: ${ep.method} ${ep.path} (call mintRestBearerForCurl for a 5-min bearer).`;
+  // Every route, not the first: ClickUp listLists has a folder route and a
+  // space route, and naming only the first sent a spaceId caller to the wrong one.
+  const routes = eps.map(ep => `${ep.method} ${ep.path}`).join(' or ');
+  return `REST: ${routes} (call mintRestBearerForCurl for a 5-min bearer).`;
 }
