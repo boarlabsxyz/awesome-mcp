@@ -21,7 +21,7 @@
       "get": {
         "operationId": "queryFreeBusy",
         "summary": "Busy intervals for one or more calendars in a time range",
-        "description": "Mirrors the MCP tool `queryFreeBusy`. Returns JSON in request order. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free. Each parameter may be given once; a repeated one, or an empty calendarIds, is a 400.",
+        "description": "Mirrors the MCP tool `queryFreeBusy`. Returns JSON in request order. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free. timeMin, timeMax and timeZone may each be given once; a repeated or empty one, or an empty calendarIds, is a 400. Omitted parameters take their defaults.",
         "tags": [
           "calendar"
         ],
@@ -33,7 +33,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Comma-separated calendar ids or email addresses, at most 50. Omit it for the primary calendar."
+            "description": "Calendar ids or email addresses, comma-separated (calendarIds=a,b), repeated (calendarIds=a&calendarIds=b) or both: every value is combined into one list of at most 50. Omit it for the primary calendar; an empty value is refused."
           },
           {
             "name": "timeMin",
@@ -120,7 +120,7 @@
             }
           },
           "400": {
-            "description": "An empty or repeated parameter, more than 50 calendars, an unparseable time, or timeMax not after timeMin",
+            "description": "A repeated or empty parameter, an empty calendarIds, more than 50 calendars, an unparseable time, or timeMax not after timeMin",
             "content": {
               "application/json": {
                 "schema": {

@@ -145,6 +145,13 @@ for (const file of files) {
     seenSchemas.add(finalName);
   }
 
+  // Merge security schemes. An operation-level `security` naming a scheme the
+  // root does not define (Slack's mintedBearer) would dangle in the merged
+  // spec. The root's own bearerAuth wins over every per-service copy of it.
+  for (const [name, scheme] of Object.entries(spec.components?.securitySchemes ?? {})) {
+    if (!root.components.securitySchemes[name]) root.components.securitySchemes[name] = scheme;
+  }
+
   // Merge paths. Iterate per method so we never silently overwrite an
   // operation a previous spec already contributed for the same path.
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {

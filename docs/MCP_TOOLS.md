@@ -567,7 +567,7 @@ Source: `src/redmine/server.ts` — 46 tools.
 | `getVersion` | Retrieve one Redmine version by ID. | `GET /api/v1/redmine/versions/{versionId}` |
 | `createVersion` | Create a version (milestone / target release) in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/versions` |
 | `updateVersion` | Update a Redmine version. Fields you omit are left untouched. | `POST /api/v1/redmine/versions/{versionId}` |
-| `deleteVersion` | Permanently delete a Redmine version. Redmine refuses (422) while any issue still targets it, a custom field references it or it has attachments: reassign or clear those issues' target version first. | `POST /api/v1/redmine/versions/{versionId}/delete` |
+| `deleteVersion` | Permanently delete a Redmine version. Redmine refuses (422) while any blocker remains: issues that target it (reassign or clear their target version), a custom field value referencing it (clear it), or files attached to it (delete them). | `POST /api/v1/redmine/versions/{versionId}/delete` |
 | `listIssueCategories` | List the issue categories defined on a Redmine project. Their IDs are what createIssue/updateIssue take as categoryId. | `GET /api/v1/redmine/projects/{projectId}/issue-categories` |
 | `createIssueCategory` | Create an issue category in a Redmine project. | `POST /api/v1/redmine/projects/{projectId}/issue-categories` |
 | `deleteIssueCategory` | Delete a Redmine issue category. Issues in it are not deleted — pass reassignToId to move them to another category, otherwise their category is cleared. | `POST /api/v1/redmine/issue-categories/{categoryId}/delete` |

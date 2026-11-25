@@ -21,7 +21,7 @@
       "get": {
         "operationId": "inspectDocStructure",
         "summary": "Inspect the structure of a Google Doc",
-        "description": "Paragraph, table and section counts, header and footer presence, and the tab hierarchy. Mirrors the MCP tool `inspectDocStructure`. Returns JSON.",
+        "description": "Paragraph, table and section counts, and header and footer presence, for one tab (the first unless tabId is given), plus the tab hierarchy. Mirrors the MCP tool `inspectDocStructure`. Returns JSON.",
         "tags": [
           "docs"
         ],
@@ -52,7 +52,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Scope the result to one tab. Defaults to every tab."
+            "description": "The tab to inspect. Defaults to the first tab, so the counts of a multi-tab document cover that tab only; the tab hierarchy always lists every tab."
           }
         ],
         "responses": {

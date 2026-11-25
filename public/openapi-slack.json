@@ -355,7 +355,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "mintedBearer": []
+          }
+        ]
       }
     }
   },
@@ -365,6 +370,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "API key obtained from the registration dashboard"
+      },
+      "mintedBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Only the 5-minute bearer from the mintRestBearerForCurl MCP tool. The permanent dashboard API key is refused with 403 on Slack writes."
       }
     },
     "schemas": {

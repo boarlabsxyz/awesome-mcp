@@ -62,62 +62,21 @@
         },
         "responses": {
           "200": {
-            "description": "Already subscribed; the existing subscription",
+            "description": "Already subscribed (or a concurrent request subscribed first); kind is existing",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/TaskEventSubscriptionResult"
                 }
               }
             }
           },
           "201": {
-            "description": "Subscription created",
+            "description": "Subscription created; kind is created",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "created",
-                        "existing"
-                      ]
-                    },
-                    "subscription": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "integer"
-                        },
-                        "workspaceId": {
-                          "type": "string"
-                        },
-                        "clickupWebhookId": {
-                          "type": "string"
-                        },
-                        "events": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        "status": {
-                          "type": "string"
-                        },
-                        "failCount": {
-                          "type": "integer"
-                        },
-                        "createdAt": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "callbackUrl": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/TaskEventSubscriptionResult"
                 }
               }
             }
@@ -4910,6 +4869,62 @@
       }
     },
     "schemas": {
+      "TaskEventSubscriptionResult": {
+        "type": "object",
+        "description": "The subscription, created now or found already in place. The webhook shared secret is stored server-side and never returned.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "created",
+              "existing"
+            ]
+          },
+          "subscription": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "userId": {
+                "type": "integer"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "clickupWebhookId": {
+                "type": "string"
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "failed",
+                  "paused"
+                ]
+              },
+              "failCount": {
+                "type": "integer"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              }
+            }
+          },
+          "callbackUrl": {
+            "type": "string"
+          }
+        }
+      },
       "User": {
         "type": "object",
         "properties": {

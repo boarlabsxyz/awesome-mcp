@@ -4698,7 +4698,7 @@
       "post": {
         "operationId": "deleteRedmineVersion",
         "summary": "Permanently delete a Redmine version",
-        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Redmine refuses (422) to delete a version that issues still target, that a custom field references or that has attachments; reassign or clear those issues target version first, then retry. Mirrors the MCP tool `deleteVersion`.",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Redmine refuses (422, often with no error text) while any blocker remains: issues that still target the version (reassign or clear their target version), a version custom field value that references it (clear that value), or files attached to the version (delete them). Clear every blocker that applies, then retry. Mirrors the MCP tool `deleteVersion`.",
         "tags": [
           "redmine"
         ],

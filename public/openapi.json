@@ -123,7 +123,7 @@
       "get": {
         "operationId": "queryFreeBusy",
         "summary": "Busy intervals for one or more calendars in a time range",
-        "description": "Mirrors the MCP tool `queryFreeBusy`. Returns JSON in request order. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free. Each parameter may be given once; a repeated one, or an empty calendarIds, is a 400.",
+        "description": "Mirrors the MCP tool `queryFreeBusy`. Returns JSON in request order. A calendar Google could not read, or did not return, has busy null with its reasons in errors: unknown, never free. timeMin, timeMax and timeZone may each be given once; a repeated or empty one, or an empty calendarIds, is a 400. Omitted parameters take their defaults.",
         "tags": [
           "calendar"
         ],
@@ -135,7 +135,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Comma-separated calendar ids or email addresses, at most 50. Omit it for the primary calendar."
+            "description": "Calendar ids or email addresses, comma-separated (calendarIds=a,b), repeated (calendarIds=a&calendarIds=b) or both: every value is combined into one list of at most 50. Omit it for the primary calendar; an empty value is refused."
           },
           {
             "name": "timeMin",
@@ -222,7 +222,7 @@
             }
           },
           "400": {
-            "description": "An empty or repeated parameter, more than 50 calendars, an unparseable time, or timeMax not after timeMin",
+            "description": "A repeated or empty parameter, an empty calendarIds, more than 50 calendars, an unparseable time, or timeMax not after timeMin",
             "content": {
               "application/json": {
                 "schema": {
@@ -1234,62 +1234,21 @@
         },
         "responses": {
           "200": {
-            "description": "Already subscribed; the existing subscription",
+            "description": "Already subscribed (or a concurrent request subscribed first); kind is existing",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/TaskEventSubscriptionResult"
                 }
               }
             }
           },
           "201": {
-            "description": "Subscription created",
+            "description": "Subscription created; kind is created",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "kind": {
-                      "type": "string",
-                      "enum": [
-                        "created",
-                        "existing"
-                      ]
-                    },
-                    "subscription": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "integer"
-                        },
-                        "workspaceId": {
-                          "type": "string"
-                        },
-                        "clickupWebhookId": {
-                          "type": "string"
-                        },
-                        "events": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        "status": {
-                          "type": "string"
-                        },
-                        "failCount": {
-                          "type": "integer"
-                        },
-                        "createdAt": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "callbackUrl": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/TaskEventSubscriptionResult"
                 }
               }
             }
@@ -6076,7 +6035,7 @@
       "get": {
         "operationId": "inspectDocStructure",
         "summary": "Inspect the structure of a Google Doc",
-        "description": "Paragraph, table and section counts, header and footer presence, and the tab hierarchy. Mirrors the MCP tool `inspectDocStructure`. Returns JSON.",
+        "description": "Paragraph, table and section counts, and header and footer presence, for one tab (the first unless tabId is given), plus the tab hierarchy. Mirrors the MCP tool `inspectDocStructure`. Returns JSON.",
         "tags": [
           "docs"
         ],
@@ -6107,7 +6066,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Scope the result to one tab. Defaults to every tab."
+            "description": "The tab to inspect. Defaults to the first tab, so the counts of a multi-tab document cover that tab only; the tab hierarchy always lists every tab."
           }
         ],
         "responses": {
@@ -18202,7 +18161,29 @@
                     "description": "Maximum matches to return (default 10, max 100)."
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "filters"
+                    ],
+                    "properties": {
+                      "filters": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -18355,7 +18336,29 @@
                     "description": "Maximum matches to return (default 10, max 100)."
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "filters"
+                    ],
+                    "properties": {
+                      "filters": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -18508,7 +18511,29 @@
                     "description": "Maximum matches to return (default 10, max 100)."
                   }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "anyOf": [
+                  {
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "required": [
+                      "filters"
+                    ],
+                    "properties": {
+                      "filters": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
@@ -36414,7 +36439,7 @@
       "post": {
         "operationId": "deleteRedmineVersion",
         "summary": "Permanently delete a Redmine version",
-        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Redmine refuses (422) to delete a version that issues still target, that a custom field references or that has attachments; reassign or clear those issues target version first, then retry. Mirrors the MCP tool `deleteVersion`.",
+        "description": "DESTRUCTIVE and permanent - Redmine has no recycle bin. Exposed with explicit sign-off. POST to an action path rather than DELETE on the resource. Redmine refuses (422, often with no error text) while any blocker remains: issues that still target the version (reassign or clear their target version), a version custom field value that references it (clear that value), or files attached to the version (delete them). Clear every blocker that applies, then retry. Mirrors the MCP tool `deleteVersion`.",
         "tags": [
           "redmine"
         ],
@@ -36732,9 +36757,10 @@
             "in": "query",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1
             },
-            "description": "The value to match exactly."
+            "description": "The value to match exactly. Empty is refused with 400."
           },
           {
             "name": "sheet",
@@ -36743,7 +36769,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Tab name. Defaults to the first tab."
+            "description": "Tab name, e.g. Q3 Plan; quoted for you. Defaults to the first tab."
           },
           {
             "name": "startRow",
@@ -36988,7 +37014,7 @@
       "post": {
         "operationId": "updateCellByFieldName",
         "summary": "Find a row by a column value and write one field of it, named by header",
-        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Row 1 holds the headers. Finds the first row whose searchColumn equals searchValue and writes newValue into the column headed fieldName, returning the old value. No matching row is a 404 and an unknown header a 400 with availableHeaders; neither writes anything. searchColumn must be column letters. A sheetName with spaces or apostrophes is quoted for you. updatedCells 1 confirms the write.",
+        "description": "Shipped on the owner request for full REST coverage of non-destructive writes. Row 1 holds the headers. Finds the first row BELOW the header row whose searchColumn equals searchValue (a header is never matched, so a header cell is never overwritten) and writes newValue into the column headed fieldName, returning the old value. No matching row is a 404 and an unknown header a 400 with availableHeaders; neither writes anything. searchColumn must be column letters. A sheetName with spaces or apostrophes is quoted for you. updatedCells 1 confirms the write.",
         "parameters": [
           {
             "name": "spreadsheetId",
@@ -37119,7 +37145,7 @@
             }
           },
           "404": {
-            "description": "Spreadsheet not found, or no row has searchValue in searchColumn",
+            "description": "Spreadsheet not found, or no row below the header row has searchValue in searchColumn",
             "content": {
               "application/json": {
                 "schema": {
@@ -38623,7 +38649,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "mintedBearer": []
+          }
+        ]
       }
     },
     "/api/v1/slides": {
@@ -39025,7 +39056,9 @@
                       ],
                       "additionalProperties": false
                     },
-                    "description": "The collection's fields, by name. Names start with a letter and use letters, digits and _ (max 64 chars); at most 50 fields."
+                    "description": "The collection's fields, by name. Names start with a letter and use letters, digits and _ (max 64 chars); at most 50 fields.",
+                    "minProperties": 1,
+                    "maxProperties": 50
                   },
                   "keyField": {
                     "type": "string",
@@ -45129,6 +45162,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Bearer token from the mintRestBearerForCurl MCP tool (5-minute TTL) or a permanent dashboard API key."
+      },
+      "mintedBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Only the 5-minute bearer from the mintRestBearerForCurl MCP tool. The permanent dashboard API key is refused with 403 on Slack writes."
       }
     },
     "schemas": {
@@ -45252,6 +45290,62 @@
           "responseStatus": {
             "type": "string",
             "description": "Attendance response (needsAction, declined, tentative, accepted)"
+          }
+        }
+      },
+      "TaskEventSubscriptionResult": {
+        "type": "object",
+        "description": "The subscription, created now or found already in place. The webhook shared secret is stored server-side and never returned.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "created",
+              "existing"
+            ]
+          },
+          "subscription": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "userId": {
+                "type": "integer"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "clickupWebhookId": {
+                "type": "string"
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "failed",
+                  "paused"
+                ]
+              },
+              "failCount": {
+                "type": "integer"
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              }
+            }
+          },
+          "callbackUrl": {
+            "type": "string"
           }
         }
       },
