@@ -127,8 +127,8 @@ function toolSourceFiles(serverPath: string): string[] {
   const absolute = resolve(REPO_ROOT, serverPath);
   const files = [absolute];
   const source = stripComments(readFileSync(absolute, 'utf8'));
-  for (const match of source.matchAll(/from\s+'(\.{1,2}\/[^']+)\.js'/g)) {
-    const candidate = resolve(dirname(absolute), `${match[1]}.ts`);
+  for (const match of source.matchAll(/from\s+(['"])(\.{1,2}\/[^'"]+)\.js\1/g)) {
+    const candidate = resolve(dirname(absolute), `${match[2]}.ts`);
     const path = relative(REPO_ROOT, candidate);
     if (path.startsWith('src/sharedTools/') || path.endsWith('/server.ts') || !existsSync(candidate)) continue;
     if (/\b[A-Za-z]*Tool\(\s*\{/.test(stripComments(readFileSync(candidate, 'utf8')))) files.push(candidate);
@@ -137,14 +137,19 @@ function toolSourceFiles(serverPath: string): string[] {
 }
 
 /**
- * Names of the tools registered in a source file: every `<anything>Tool({ name: '...' })`
+ * The tools registered in a source file: every `<anything>Tool({ name: '...' })`
  * call. Matching any identifier ending in `Tool` covers `addTool` and the
  * per-provider helpers (addPaginatedListTool, addRecentListTool, supabaseTool,
- * and whatever comes next) without a list to keep in step. A helper's own
- * definition passes `name: config.name`, which is not a literal and is skipped.
+ * and whatever comes next) without a list to keep in step.
+ *
+ * A block whose `name:` is not a string literal is returned in `unnamed` with
+ * its name expression, never dropped: a helper's own definition passes
+ * `name: opts.name`, which is fine, but `name: SOME_CONST` would be a real
+ * tool this guard could not see.
  */
-function registeredToolNames(source: string): string[] {
+function scanRegistrations(source: string): { names: string[]; unnamed: string[] } {
   const names: string[] = [];
+  const unnamed: string[] = [];
   const opener = /\b[A-Za-z]*Tool\(\s*\{/g;
   let match: RegExpExecArray | null;
   while ((match = opener.exec(source)) !== null) {
@@ -166,18 +171,26 @@ function registeredToolNames(source: string): string[] {
       }
       index += 1;
     }
-    const name = source.slice(start, index - 1).match(/(?:^|[\s,{])name:\s*(['"])([^'"]+)\1/)?.[2];
+    const block = source.slice(start, index - 1);
+    const name = block.match(/(?:^|[\s,{])name:\s*(['"])([^'"]+)\1/)?.[2];
     if (name !== undefined) names.push(name);
+    else unnamed.push(block.match(/(?:^|[\s,{])name:\s*([^,\n}]+)/)?.[1]?.trim() ?? '(no name field)');
   }
-  return names;
+  return { names, unnamed };
 }
 
-function toolsOf(service: RestService): Set<string> {
-  const names = new Set<string>();
+/** A helper's definition forwarding its caller's literal name. */
+const HELPER_NAME_FORWARD = /^(?:opts|config|def)\.name$/;
+
+function scanService(service: RestService): { tools: Set<string>; unnamed: string[] } {
+  const tools = new Set<string>();
+  const unnamed: string[] = [];
   for (const file of toolSourceFiles(SERVICE_SERVER_PATH[service])) {
-    for (const name of registeredToolNames(stripComments(readFileSync(file, 'utf8')))) names.add(name);
+    const scan = scanRegistrations(stripComments(readFileSync(file, 'utf8')));
+    for (const name of scan.names) tools.add(name);
+    for (const expr of scan.unnamed) unnamed.push(`${relative(REPO_ROOT, file)}: name: ${expr}`);
   }
-  return names;
+  return { tools, unnamed };
 }
 
 function catalogued(service: RestService): Set<string> {
@@ -206,12 +219,22 @@ describe('every MCP tool on a REST-plane server makes a REST decision', () => {
 
   for (const service of SERVICES) {
     describe(service, () => {
-      const tools = toolsOf(service);
+      const { tools, unnamed } = scanService(service);
       const inCatalog = catalogued(service);
       const mcpOnly = MCP_ONLY[service] ?? {};
 
       it('the scan finds its tools', () => {
         assert.ok(tools.size > 0, `found no tool registrations in ${SERVICE_SERVER_PATH[service]}: the scanner is broken`);
+      });
+
+      it('every registration has a literal name, or is a helper forwarding one', () => {
+        const unseen = unnamed.filter(entry => !HELPER_NAME_FORWARD.test(entry.slice(entry.indexOf('name: ') + 6)));
+        assert.deepEqual(
+          unseen,
+          [],
+          'These registrations have no literal name, so this guard cannot see the tool they register. ' +
+            'Use a string literal for `name:`, or, for a registration helper, forward `opts.name` / `config.name` / `def.name`.',
+        );
       });
 
       it('each tool has a catalog entry or an MCP_ONLY reason', () => {

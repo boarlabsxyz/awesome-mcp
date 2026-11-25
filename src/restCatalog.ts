@@ -634,6 +634,8 @@ export function endpointsForService(service: RestService): RestEndpoint[] {
 export function restHintForTool(mcpToolName: string): string | null {
   const eps = endpointsForTool(mcpToolName);
   if (eps.length === 0) return null;
-  const ep = eps[0];
-  return `REST: ${ep.method} ${ep.path} (call mintRestBearerForCurl for a 5-min bearer).`;
+  // Every route, not the first: ClickUp listLists has a folder route and a
+  // space route, and naming only the first sent a spaceId caller to the wrong one.
+  const routes = eps.map(ep => `${ep.method} ${ep.path}`).join(' or ');
+  return `REST: ${routes} (call mintRestBearerForCurl for a 5-min bearer).`;
 }
