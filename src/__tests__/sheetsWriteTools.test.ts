@@ -545,12 +545,16 @@ describe('grid growth operations', () => {
 
 describe('updateCellByFieldName', () => {
   /** A sheet whose column A holds ids and row 1 the headers. */
-  function grid(update: any = mock.fn(async () => ({ data: { updatedCells: 1 } }))): any {
-    const rows = [['id', 'name', 'status'], ['a1', 'Ada', 'new'], ['b2', 'Bob', 'new']];
+  function grid(
+    update: any = mock.fn(async () => ({ data: { updatedCells: 1 } })),
+    rows: string[][] = [['id', 'name', 'status'], ['a1', 'Ada', 'new'], ['b2', 'Bob', 'new']],
+  ): any {
     return mkSheets({
       values: {
         get: mock.fn(async ({ range }: any) => {
-          if (/(^|!)[A-Z]+:[A-Z]+$/i.test(range)) return { data: { values: rows.map(r => [r[0]]) } };
+          // A column read, A:A or A2:A: the values from that row down, like Google.
+          const col = /(?:^|!)[A-Z]+(\d*):[A-Z]+$/i.exec(range);
+          if (col) return { data: { values: rows.slice(Number(col[1] || 1) - 1).map(r => [r[0]]) } };
           if (/1:1$/.test(range)) return { data: { values: [rows[0]] } };
           const n = Number(String(range).split('!').pop()!.split(':')[0]);
           return { data: { values: [rows[n - 1]] } };
@@ -594,7 +598,7 @@ describe('updateCellByFieldName', () => {
       const sheets = grid();
       const r: any = await performUpdateCellByFieldName(sheets, { ...args, searchColumn });
       assert.equal(r.success, true, searchColumn);
-      assert.equal(sheets.spreadsheets.values.get.mock.calls[0].arguments[0].range, `${searchColumn}:${searchColumn}`);
+      assert.equal(sheets.spreadsheets.values.get.mock.calls[0].arguments[0].range, `${searchColumn}2:${searchColumn}`);
     }
   });
 
@@ -603,9 +607,42 @@ describe('updateCellByFieldName', () => {
       const sheets = grid();
       await performUpdateCellByFieldName(sheets, { ...args, sheetName });
       const reads = sheets.spreadsheets.values.get.mock.calls.map((c: any) => c.arguments[0].range).sort();
-      assert.deepEqual(reads, [`${quoted}!1:1`, `${quoted}!3:3`, `${quoted}!A:A`].sort());
+      assert.deepEqual(reads, [`${quoted}!1:1`, `${quoted}!3:3`, `${quoted}!A2:A`].sort());
       assert.equal(sheets.spreadsheets.values.update.mock.calls[0].arguments[0].range, `${quoted}!C3`);
     }
+  });
+
+  it('never matches the header row: a searchValue equal to a header is "no matching row", with no write', async () => {
+    const update = mock.fn(async () => ({ data: { updatedCells: 1 } }));
+    const rows = [['Name', 'Status'], ['Ada', 'new']];
+    const r: any = await performUpdateCellByFieldName(grid(update, rows), {
+      spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'Name', fieldName: 'Status', newValue: 'x',
+    });
+    assert.equal(r.success, false);
+    assert.equal(r.reason, 'valueNotFound');
+    assert.match(r.error, /below the header row/);
+    assert.equal(update.mock.calls.length, 0);
+    // A data row still matches, at its absolute row number.
+    const hit: any = await performUpdateCellByFieldName(grid(update, rows), {
+      spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'Ada', fieldName: 'Status', newValue: 'done',
+    });
+    assert.deepEqual(hit.updated, { row: 2, column: 'B', cell: 'B2' });
+  });
+
+  it('the read tools findRowByValue and readRowByField refuse a cell reference too, and keep matching from row 1', async () => {
+    for (const name of ['findRowByValue', 'readRowByField']) {
+      const sheets = grid();
+      await assert.rejects(
+        callTool(name, { spreadsheetId: 'ss-1', searchColumn: 'A2', searchValue: 'b2' }, { googleSheets: sheets }),
+        (err: any) => err instanceof UserError && /column letters/.test(err.message),
+      );
+      assert.equal(sheets.spreadsheets.values.get.mock.calls.length, 0, name);
+    }
+    // Read-only search is unchanged: it still scans the whole column, header row included.
+    const found = await callTool('findRowByValue', { spreadsheetId: 'ss-1', searchColumn: 'A', searchValue: 'id' }, { googleSheets: grid() });
+    assert.equal(found, 'Found "id" in row 1.');
+    const row = await callTool('readRowByField', { spreadsheetId: 'ss-1', searchColumn: 'AA', searchValue: 'b2' }, { googleSheets: grid() });
+    assert.match(String(row), /Bob/);
   });
 
   it('returns a reason, writing nothing, for a missing value or header', async () => {
@@ -877,5 +914,14 @@ describe('review follow-ups', () => {
       () => callTool('deleteSpreadsheetRowsOrColumns', { spreadsheetId: 'ss', dimension: 'ROWS', startIndex: 2, endIndex: 10 }, { googleSheets: sheets }),
       (err: any) => err instanceof UserError && /^Nothing was deleted: You can't delete all the rows/.test(err.message),
     );
+  });
+});
+
+describe('sheet range builders', () => {
+  it('quote a tab name with spaces or apostrophes, and leave the first-tab default bare', () => {
+    assert.equal(SheetsHelpers.sheetRangePrefix(undefined), '');
+    assert.equal(SheetsHelpers.columnSearchRange('A', 1, 10000, 'Q3 Plan'), "'Q3 Plan'!A1:A10000");
+    assert.equal(SheetsHelpers.columnSearchRange('B', 5, 9, "Bob's Sheet"), "'Bob''s Sheet'!B5:B9");
+    assert.equal(SheetsHelpers.columnSearchRange('C', 1, 3), 'C1:C3');
   });
 });

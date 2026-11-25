@@ -89,7 +89,7 @@ export async function performAddSpreadsheetSheet(
 
 export const updateCellByFieldNameSchema = z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-  searchColumn: z.string().describe('Column letter to search in (e.g., "A").'),
+  searchColumn: z.string().describe('Column letters to search in (e.g., "A" or "AA"); a cell reference such as "A2" is refused.'),
   searchValue: z.string().describe('The value to search for (exact match) to locate the row.'),
   fieldName: z.string().describe('The header name of the column to update.'),
   newValue: z.string().describe('The new value to write into the cell.'),
@@ -120,19 +120,16 @@ export async function performUpdateCellByFieldName(
   sheets: sheets_v4.Sheets,
   args: z.infer<typeof updateCellByFieldNameSchema>,
 ): Promise<UpdateCellByFieldNameResult> {
-  // Column letters only. "A2" would read the range A2:A2, so a match there is
-  // reported as row 1 and the write lands on the header row. Refused here, in
-  // the op both surfaces run, rather than with a Zod regex (root CLAUDE.md).
-  if (!/^[A-Za-z]+$/.test(args.searchColumn)) {
-    throw new UserError(`searchColumn must be column letters such as A or AA, not "${args.searchColumn.slice(0, 20)}".`);
-  }
+  SheetsHelpers.assertColumnLetters(args.searchColumn);
+  // The lookup starts at row 2: row 1 holds the headers, and a searchValue
+  // equal to a header must not turn this into a write over the header row.
   const [rowNumber, headers] = await Promise.all([
-    SheetsHelpers.findRowByValue(sheets, args.spreadsheetId, args.searchColumn, args.searchValue, args.sheetName),
+    SheetsHelpers.findRowByValue(sheets, args.spreadsheetId, args.searchColumn, args.searchValue, args.sheetName, 2),
     SheetsHelpers.getHeaders(sheets, args.spreadsheetId, args.sheetName),
   ]);
 
   if (rowNumber === null) {
-    return { success: false, reason: 'valueNotFound', error: `Value "${args.searchValue}" not found in column ${args.searchColumn}.` };
+    return { success: false, reason: 'valueNotFound', error: `Value "${args.searchValue}" not found in column ${args.searchColumn} below the header row.` };
   }
 
   const colIndex = headers.indexOf(args.fieldName);
@@ -711,12 +708,13 @@ sheetsServer.addTool({
   description: 'Search a column for a specific value and return the 1-based row number where it was found.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    searchColumn: z.string().describe('Column letter to search in (e.g., "A", "B", "AA").'),
+    searchColumn: z.string().describe('Column letters to search in (e.g., "A", "B", "AA"); a cell reference such as "A2" is refused.'),
     searchValue: z.string().describe('The value to search for (exact match).'),
     sheetName: z.string().optional().describe('Sheet/tab name. Defaults to the first sheet.'),
   }),
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
+    SheetsHelpers.assertColumnLetters(args.searchColumn);
     log.info(`Finding row with "${args.searchValue}" in column ${args.searchColumn}`);
 
     const rowNumber = await SheetsHelpers.findRowByValue(
@@ -736,12 +734,13 @@ sheetsServer.addTool({
   description: 'Look up a row by searching a column for a value, then return the row as a named JSON object using header names from row 1.',
   parameters: z.object({
     spreadsheetId: z.string().describe('The ID of the Google Spreadsheet (from the URL).'),
-    searchColumn: z.string().describe('Column letter to search in (e.g., "A").'),
+    searchColumn: z.string().describe('Column letters to search in (e.g., "A" or "AA"); a cell reference such as "A2" is refused.'),
     searchValue: z.string().describe('The value to search for (exact match).'),
     sheetName: z.string().optional().describe('Sheet/tab name. Defaults to the first sheet.'),
   }),
   execute: async (args, { log, session }) => {
     const sheets = getSheetsClient(session);
+    SheetsHelpers.assertColumnLetters(args.searchColumn);
     log.info(`Reading row where column ${args.searchColumn} = "${args.searchValue}"`);
 
     const rowNumber = await SheetsHelpers.findRowByValue(

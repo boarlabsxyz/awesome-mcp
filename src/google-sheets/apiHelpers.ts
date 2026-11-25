@@ -95,6 +95,26 @@ export function sheetRangePrefix(sheetName?: string): string {
 }
 
 /**
+ * Refuse a search column that is not plain column letters. "A2" would read
+ * the range A2:A2, so a match is reported as row 1 rather than row 2: a read
+ * returns the wrong row and a field update writes over the header row. Called
+ * from the tools' execute and the shared op, not a Zod regex (root CLAUDE.md).
+ */
+export function assertColumnLetters(column: string, name = 'searchColumn'): void {
+  if (!/^[A-Za-z]+$/.test(column)) {
+    throw new UserError(`${name} must be column letters such as A or AA, not "${column.slice(0, 20)}".`);
+  }
+}
+
+/**
+ * The bounded single-column range GET /api/v1/sheets/{id}/search reads:
+ * rows startRow..endRow of one column, on the named tab (quoted) or the first.
+ */
+export function columnSearchRange(column: string, startRow: number, endRow: number, sheetName?: string): string {
+  return `${sheetRangePrefix(sheetName)}${column}${startRow}:${column}${endRow}`;
+}
+
+/**
  * Reads values from a spreadsheet range
  */
 export async function readRange(
@@ -593,16 +613,18 @@ export async function findRowByValue(
   spreadsheetId: string,
   searchColumn: string,
   searchValue: string,
-  sheetName?: string
+  sheetName?: string,
+  fromRow = 1,
 ): Promise<number | null> {
-  const range = `${sheetRangePrefix(sheetName)}${searchColumn}:${searchColumn}`;
+  // fromRow 2 skips the header row: a field update must never match row 1.
+  const range = `${sheetRangePrefix(sheetName)}${searchColumn}${fromRow > 1 ? fromRow : ''}:${searchColumn}`;
 
   const data = await readRange(sheets, spreadsheetId, range);
   const rows = data.values || [];
 
   for (let i = 0; i < rows.length; i++) {
     if (rows[i][0] !== undefined && String(rows[i][0]) === searchValue) {
-      return i + 1; // 1-based row number
+      return i + fromRow; // absolute 1-based row number
     }
   }
   return null;

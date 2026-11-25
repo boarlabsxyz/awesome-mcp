@@ -316,6 +316,15 @@ describe('REST data plane: Browserbase handlers', () => {
     assert.equal(acted.status, 200);
   });
 
+  it('has no /end route: an authenticated POST is a 404 and reaches no upstream', async () => {
+    // The owner declined REST for end (it always ends in a force release);
+    // MCP_ONLY records the decision and this pins that nothing serves it.
+    const calls = mockUpstreams({ toolText: 'closed', rest: { id: 'sess-1', status: 'REQUEST_RELEASE' } });
+    const res = await post('/api/v1/browserbase/sessions/sess-1/end');
+    assert.equal(res.status, 404);
+    assert.equal(calls.length, 0);
+  });
+
   it('403s for an account with no Browserbase connection', async () => {
     await createOrUpdateUser(
       { email: 'bb-none@example.com', googleId: 'google-bb-none', name: 'BB None' },

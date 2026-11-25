@@ -226,8 +226,12 @@ describe('subscribeToTaskEventsFlow', () => {
 
   it('keeps a lost race an error when its webhook could not be deleted, or no winner is found', async () => {
     const dup = () => { throw Object.assign(new Error('duplicate key value'), { code: '23505' }); };
+    // A winner exists on the re-read, so only the cleanup-success guard keeps
+    // this an error: dropping the guard would answer existing and hide the
+    // orphaned webhook.
+    let orphanFinds = 0;
     const orphan = fakeDeps({
-      findSubscription: async () => null,
+      findSubscription: async () => (++orphanFinds === 1 ? null : fakeSubscription({ clickupWebhookId: 'wh-winner' })),
       createSubscription: async () => dup(),
       deleteWebhook: async () => { throw new Error('clickup down'); },
     });

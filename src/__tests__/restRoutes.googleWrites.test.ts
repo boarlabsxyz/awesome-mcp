@@ -431,6 +431,24 @@ describe('REST data plane: Google Sheets and Calendar write validation', () => {
       }
     });
 
+    it('refuses an explicitly empty time parameter instead of using the default window', async () => {
+      for (const q of ['timeMin=', 'timeMax=', 'timeZone=', 'timeMin=&calendarIds=primary']) {
+        const res = await request(app).get(`/api/v1/calendars/freebusy?${q}`).set(auth());
+        assert.equal(res.status, 400, q);
+        assert.match(res.body.error, /must not be empty/);
+      }
+    });
+
+    it('combines repeated and comma-separated calendarIds into one list, held to the 50-id limit', async () => {
+      // 26 repeated keys plus a 25-id CSV is 51 ids: refused as one list, which
+      // proves both encodings reach the same list rather than one being dropped.
+      const repeated = Array.from({ length: 26 }, (_, i) => `calendarIds=r${i}@x.test`).join('&');
+      const csv = Array.from({ length: 25 }, (_, i) => `c${i}@x.test`).join(',');
+      const res = await request(app).get(`/api/v1/calendars/freebusy?${repeated}&calendarIds=${csv}`).set(auth());
+      assert.equal(res.status, 400);
+      assert.match(res.body.error, /Too many calendars \(51\)/);
+    });
+
     it('refuses a searchColumn that is a cell reference on update-by-field, before calling Google', async () => {
       const res = await request(app).post('/api/v1/sheets/sheet-123/cells/update-by-field').set(auth())
         .send({ searchColumn: 'A2', searchValue: 'x', fieldName: 'f', newValue: 'y' });

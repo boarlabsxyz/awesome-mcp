@@ -5512,6 +5512,16 @@ function registerRestApiRoutes(app: express.Express): void {
         res.status(400).json({ error: `Query parameter(s) ${repeated.join(', ')} must be given exactly once.` });
         return;
       }
+      // Sent but empty (timeMin=) is refused too, not read as omitted: the
+      // caller named a bound, and the default window is not what they asked.
+      const blank = ['timeMin', 'timeMax', 'timeZone'].filter((k) => req.query[k] === '');
+      if (blank.length) {
+        res.status(400).json({ error: `Query parameter(s) ${blank.join(', ')} must not be empty. Omit a parameter to use its default.` });
+        return;
+      }
+      // calendarIds may be comma-separated, repeated, or both
+      // (calendarIds=a,b&calendarIds=c); qarr combines them, and the 50-id
+      // limit applies to the combined list.
       if (req.query.calendarIds !== undefined && !qarr(req.query.calendarIds)) {
         res.status(400).json({ error: 'calendarIds is empty. Omit it for the primary calendar, or give comma-separated calendar ids.' });
         return;
@@ -7580,8 +7590,10 @@ function registerRestApiRoutes(app: express.Express): void {
       const startRow = qint(req.query.startRow, 1, { min: 1 });
       const maxRows = qint(req.query.maxRows, MAX_ROWS, { min: 1, max: MAX_ROWS });
       const endRow = startRow + maxRows - 1;
-      const colRange = `${col}${startRow}:${col}${endRow}`;
-      const range = sheetName ? `${sheetName}!${colRange}` : colRange;
+      // The tab name is quoted like every other range built from one: "Q3 Plan"
+      // and "Bob's" are rejected by Google unquoted.
+      const { columnSearchRange } = await import('../google-sheets/apiHelpers.js');
+      const range = columnSearchRange(col, startRow, endRow, sheetName || undefined);
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId: req.params.spreadsheetId as string,
         range,
