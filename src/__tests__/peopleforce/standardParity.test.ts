@@ -204,6 +204,16 @@ describe('salaries', () => {
     assert.match(out, /^No current rate: next 30\.00 USD per hour from 2027-01-01$/m);
   });
 
+  test('the next scheduled rate on a shared date is the highest id, as markCurrentSalaries picks', () => {
+    for (const input of [
+      [hourly(5, '2027-01-01', '1.00'), hourly(9, '2027-01-01', '2.00'), hourly(3, '2027-06-01', '3.00')],
+      [hourly(3, '2027-06-01', '3.00'), hourly(9, '2027-01-01', '2.00'), hourly(5, '2027-01-01', '1.00')],
+    ]) {
+      const out = formatSalaries(input, TODAY);
+      assert.match(out, /^No current rate: next 2\.00 USD per hour from 2027-01-01$/m);
+    }
+  });
+
   test('a same-day record that is not current is not marked scheduled', () => {
     const out = formatSalaries([hourly(1, TODAY, '1.00'), hourly(2, TODAY, '2.00')], TODAY);
     assert.match(out, /^## 1\. 2\.00 USD per hour \(current\)$/m);

@@ -1555,7 +1555,11 @@ export function formatSalaries(
       const before = prev ? ` (previously ${salaryAmount(prev)}, from ${prev.effective_on})` : '';
       lines.push({ group, render: (label) => `Current${label}: ${salaryAmount(cur)}, effective ${cur.effective_on}${before}` });
     } else {
-      const next = [...group].reverse().find((s) => s.effective_on);
+      // Every dated record here is future-dated. The next rate is the earliest
+      // date's highest id: the one markCurrentSalaries will mark current then.
+      const dated = group.filter((s) => s.effective_on);
+      const firstDate = dated[dated.length - 1]?.effective_on;
+      const next = dated.find((s) => s.effective_on === firstDate);
       if (next) lines.push({ group, render: (label) => `No current rate${label}: next ${salaryAmount(next)} from ${next.effective_on}` });
     }
   }
