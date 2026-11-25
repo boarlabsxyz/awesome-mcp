@@ -1540,24 +1540,34 @@ export function formatSalaries(
   const groups = new Map<string, Array<PeopleForceSalary & { current: boolean }>>();
   for (const s of marked) {
     const key = salaryGroupKey(s);
-    groups.set(key, [...(groups.get(key) ?? []), s]);
+    const group = groups.get(key);
+    if (group) group.push(s);
+    else groups.set(key, [s]);
   }
-  const summary: string[] = [];
+  // Only dated records say anything about when a rate applied, so neither the
+  // previous rate nor the next scheduled one is ever an undated record.
+  const lines: Array<{ group: Array<PeopleForceSalary & { current: boolean }>; render: (label: string) => string }> = [];
   for (const group of groups.values()) {
-    const label = groups.size > 1 ? ` (${salaryGroupLabel(group[0])})` : '';
     const idx = group.findIndex((s) => s.current);
     if (idx >= 0) {
       const cur = group[idx];
-      // The next-older DATED record; an undated one says nothing about when
-      // it applied, so it is never cited as the previous rate.
       const prev = group.slice(idx + 1).find((s) => s.effective_on);
-      const before = prev ? ` (previously ${salaryAmount(prev)}${prev.effective_on ? `, from ${prev.effective_on}` : ''})` : '';
-      summary.push(`Current${label}: ${salaryAmount(cur)}, effective ${cur.effective_on}${before}`);
+      const before = prev ? ` (previously ${salaryAmount(prev)}, from ${prev.effective_on})` : '';
+      lines.push({ group, render: (label) => `Current${label}: ${salaryAmount(cur)}, effective ${cur.effective_on}${before}` });
     } else {
       const next = [...group].reverse().find((s) => s.effective_on);
-      if (next) summary.push(`No current rate${label}: next ${salaryAmount(next)} from ${next.effective_on}`);
+      if (next) lines.push({ group, render: (label) => `No current rate${label}: next ${salaryAmount(next)} from ${next.effective_on}` });
     }
   }
+  // Label lines only when there is more than one of them, and add the
+  // component id when two components share a name, so every line is distinct.
+  const names = lines.map((l) => salaryGroupLabel(l.group[0]));
+  const summary = lines.map((l, i) => {
+    if (lines.length < 2) return l.render('');
+    const id = l.group[0].compensation_component?.id;
+    const clash = names.filter((n) => n === names[i]).length > 1 && id !== undefined && id !== null && names[i] !== `component ${id}`;
+    return l.render(` (${names[i]}${clash ? `, id ${id}` : ''})`);
+  });
   const parts = ['# Salary History (newest first)', ''];
   if (summary.length) parts.push(...summary, '');
   marked.forEach((s, i) => {

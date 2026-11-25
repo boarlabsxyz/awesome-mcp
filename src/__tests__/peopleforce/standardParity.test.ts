@@ -128,12 +128,62 @@ describe('salaries', () => {
   });
 
   test('groups by component id: same name with different ids stays apart, same id merges', () => {
+    // Dates chosen so grouping by name would give a different answer.
     const out = markCurrentSalaries([
-      hourly(1, '2026-01-01', '1.00', { compensation_component: { id: 1, name: 'Pay' } }),
+      hourly(1, '2026-03-01', '1.00', { compensation_component: { id: 1, name: 'Pay' } }),
       hourly(2, '2026-02-01', '2.00', { compensation_component: { id: 2, name: 'Pay' } }),
-      hourly(3, '2026-03-01', '3.00', { compensation_component: { id: 1, name: 'Pay (renamed)' } }),
+      hourly(3, '2026-01-01', '3.00', { compensation_component: { id: 1, name: 'Pay (renamed)' } }),
     ], TODAY);
-    assert.deepEqual(out.map((s) => [s.id, s.current]), [[3, true], [2, true], [1, false]]);
+    assert.deepEqual(out.map((s) => [s.id, s.current]), [[1, true], [2, true], [3, false]]);
+  });
+
+  test('a named component without an id stays apart from records with no component', () => {
+    const out = markCurrentSalaries([
+      hourly(1, '2026-01-01', '1.00', { compensation_component: { name: 'Base' } }),
+      hourly(2, '2026-02-01', '2.00'),
+    ], TODAY);
+    assert.deepEqual(out.map((s) => [s.id, s.current]), [[2, true], [1, true]]);
+  });
+
+  test('an empty effective_on is never current', () => {
+    assert.deepEqual(markCurrentSalaries([{ id: 1, effective_on: '', amount: '1.00' }], TODAY).map((s) => s.current), [false]);
+  });
+
+  test('a group is labelled with its newest name; same-named components are told apart by id', () => {
+    const renamed = formatSalaries([
+      hourly(1, '2025-01-01', '1.00', { compensation_component: { id: 1, name: 'Pay' } }),
+      hourly(2, '2026-01-01', '2.00', { compensation_component: { id: 1, name: 'Salary' } }),
+      hourly(3, '2026-01-01', '9.00', { compensation_component: { id: 5, name: 'Bonus' } }),
+    ], TODAY);
+    assert.ok(renamed.includes('Current (Salary): 2.00 USD per hour'));
+    const clash = formatSalaries([
+      hourly(1, '2026-01-01', '1.00', { compensation_component: { id: 1, name: 'Pay' } }),
+      hourly(2, '2026-01-01', '2.00', { compensation_component: { id: 2, name: 'Pay' } }),
+    ], TODAY);
+    assert.ok(clash.includes('Current (Pay, id 1): 1.00 USD per hour'));
+    assert.ok(clash.includes('Current (Pay, id 2): 2.00 USD per hour'));
+  });
+
+  test('a group with only undated records adds no line and does not switch labels on', () => {
+    const out = formatSalaries([
+      { id: 9, amount: '5.00', currency_code: 'USD', per: 'hour', compensation_component: { id: 2, name: 'Bonus' } },
+      hourly(1, '2026-01-01', '22.00'),
+    ], TODAY);
+    assert.match(out, /^Current: 22\.00 USD per hour, effective 2026-01-01$/m);
+  });
+
+  test('the next scheduled rate is never an undated record', () => {
+    const out = formatSalaries([
+      hourly(1, '2027-01-01', '30.00'),
+      { id: 9, amount: '5.00', currency_code: 'USD', per: 'hour' },
+    ], TODAY);
+    assert.match(out, /^No current rate: next 30\.00 USD per hour from 2027-01-01$/m);
+  });
+
+  test('a same-day record that is not current is not marked scheduled', () => {
+    const out = formatSalaries([hourly(1, TODAY, '1.00'), hourly(2, TODAY, '2.00')], TODAY);
+    assert.match(out, /^## 1\. 2\.00 USD per hour \(current\)$/m);
+    assert.match(out, /^## 2\. 1\.00 USD per hour$/m);
   });
 
   test('equal dates are ordered by id whatever the input order', () => {

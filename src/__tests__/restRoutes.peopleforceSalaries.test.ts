@@ -73,7 +73,7 @@ describe('REST data plane: PeopleForce salaries gate', () => {
       if (String(url).includes('peopleforce')) urls.push(String(url));
       return new Response(
         JSON.stringify(upstreamStatus === 200
-          ? { data: upstreamData }
+          ? { data: upstreamData, metadata: { pagination: { page: 1, pages: 1 } } }
           : { error: 'forbidden' }),
         { status: upstreamStatus, headers: { 'content-type': 'application/json' } },
       );
@@ -116,6 +116,23 @@ describe('REST data plane: PeopleForce salaries gate', () => {
     const res = await get(listedKey);
     assert.equal(res.status, 200);
     assert.deepEqual(res.body.data.map((s: any) => [s.id, s.current]), [[3, false], [2, true], [1, false]]);
+  });
+
+  it('keeps the rest of the upstream payload', async () => {
+    const res = await get(listedKey);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.metadata, { pagination: { page: 1, pages: 1 } });
+  });
+
+  it('renders the marked history as text, using today for the scheduled marker', async () => {
+    upstreamData = [
+      { id: 1, effective_on: '2000-01-01', amount: '10.00', currency_code: 'USD', per: 'hour' },
+      { id: 2, effective_on: '2999-01-01', amount: '30.00', currency_code: 'USD', per: 'hour' },
+    ];
+    const res = await get(listedKey, '?format=text');
+    assert.equal(res.status, 200);
+    assert.match(res.text, /^Current: 10\.00 USD per hour, effective 2000-01-01$/m);
+    assert.match(res.text, /## 1\. 30\.00 USD per hour \(scheduled\)/);
   });
 
   it('serves an admin who is not on the compensation list', async () => {
