@@ -838,6 +838,85 @@ describe('Email + password authentication', () => {
     });
   });
 
+  describe('sign-up domain allowlist (ALLOWED_SIGNUP_DOMAINS)', () => {
+    const saved = { domains: process.env.ALLOWED_SIGNUP_DOMAINS, admins: process.env.ADMIN_EMAILS };
+    const restore = () => {
+      if (saved.domains === undefined) delete process.env.ALLOWED_SIGNUP_DOMAINS;
+      else process.env.ALLOWED_SIGNUP_DOMAINS = saved.domains;
+      if (saved.admins === undefined) delete process.env.ADMIN_EMAILS;
+      else process.env.ADMIN_EMAILS = saved.admins;
+    };
+
+    it('refuses a sign-up outside the list with 403, before sending any mail', async () => {
+      process.env.ALLOWED_SIGNUP_DOMAINS = 'allowed.test';
+      try {
+        const email = freshEmail(); // @example.com
+        const res = await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+        assert.equal(res.status, 403);
+        assert.equal(res.body.code, 'signup_domain_not_allowed');
+        assert.equal(lastVerificationToken(email), undefined, 'no link mailed');
+      } finally { restore(); }
+    });
+
+    it('answers by domain alone, the same for an address that already has an account', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      process.env.ALLOWED_SIGNUP_DOMAINS = 'allowed.test';
+      try {
+        const res = await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+        assert.equal(res.status, 403, 'not the 202 that would differ from a new address');
+        assert.equal(res.body.code, 'signup_domain_not_allowed');
+      } finally { restore(); }
+    });
+
+    it('accepts a sign-up inside the list', async () => {
+      process.env.ALLOWED_SIGNUP_DOMAINS = '@Example.com, other.test';
+      try {
+        const res = await registerAndVerify(freshEmail());
+        assert.equal(res.headers.location, '/dashboard');
+      } finally { restore(); }
+    });
+
+    it('answers an admin address outside the list exactly like any other, so register reveals no admins', async () => {
+      const admin = freshEmail();
+      process.env.ALLOWED_SIGNUP_DOMAINS = 'allowed.test';
+      process.env.ADMIN_EMAILS = admin;
+      try {
+        const asAdmin = await request(app).post('/api/auth/register').send({ email: admin, password: GOOD_PASSWORD });
+        const asOther = await request(app).post('/api/auth/register').send({ email: freshEmail(), password: GOOD_PASSWORD });
+        assert.equal(asAdmin.status, 403);
+        assert.deepEqual(asAdmin.body, asOther.body);
+      } finally { restore(); }
+    });
+
+    it('refuses a pending link when the list changed after it was sent', async () => {
+      const email = freshEmail();
+      await request(app).post('/api/auth/register').send({ email, password: GOOD_PASSWORD });
+      const token = lastVerificationToken(email)!;
+      process.env.ALLOWED_SIGNUP_DOMAINS = 'allowed.test';
+      try {
+        const res = await redeem(token);
+        assert.equal(res.headers.location, '/login?verify=domain');
+        assert.equal(await getUserByEmail(email), undefined, 'no account created');
+      } finally { restore(); }
+    });
+
+    it('still signs in an existing account outside the list', async () => {
+      const email = freshEmail();
+      await registerAndVerify(email);
+      process.env.ALLOWED_SIGNUP_DOMAINS = 'allowed.test';
+      try {
+        const res = await request(app).post('/api/auth/login').send({ email, password: GOOD_PASSWORD });
+        assert.equal(res.status, 200);
+      } finally { restore(); }
+    });
+
+    it('has a login-page message for verify=domain', () => {
+      const html = fs.readFileSync(path.resolve('public/login.html'), 'utf8');
+      assert.match(html, /\n\s*domain: '/);
+    });
+  });
+
   describe('hiding Google sign-in (HIDE_GOOGLE_SIGNIN)', () => {
     // publicDir resolves to src/public under tsx, so the page routes may 404 in
     // test. Exercise the strip against the real files instead, then assert the

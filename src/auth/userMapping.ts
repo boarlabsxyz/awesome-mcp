@@ -3,6 +3,7 @@
 
 import { getUserByAuth0Sub, setAuth0Sub, getUserByEmail, createUser, type UserRecord } from '../userStore.js';
 import type { JwtPayload } from './jwtValidator.js';
+import { isSignupAllowed, SignupNotAllowedError } from './signupPolicy.js';
 
 /** Dependencies for user mapping, injectable for testing. */
 export interface UserMappingDeps {
@@ -81,7 +82,14 @@ export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = 
   }
 
   // 3. Brand-new user — create with minimal profile (no Google tokens). An
-  //    unverified address is not used as the account email.
+  //    unverified address is not used as the account email. The sign-up
+  //    domain list applies to the address the account would get, so with a
+  //    list set, an identity with no verified email (the `${sub}@auth0`
+  //    fallback) is refused too.
+  if (!isSignupAllowed(verifiedEmail ?? `${payload.sub}@auth0`, { exemptAdmins: !!verifiedEmail })) {
+    console.error(`[user-mapping] Refusing to create an account for sub=${payload.sub}: sign-up domain not allowed`);
+    throw new SignupNotAllowedError();
+  }
   console.error(`[user-mapping] Creating new user for sub=${payload.sub}, email=${verifiedEmail ?? '(none verified)'}`);
   try {
     const newUser = await deps.createUser({

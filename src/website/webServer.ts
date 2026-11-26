@@ -18,6 +18,7 @@ import { resourceServerMiddleware, createResourceServerMiddleware, stripTrustedI
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
+import { decideGoogleSignIn, isSignupAllowed, SIGNUP_NOT_ALLOWED_MESSAGE } from '../auth/signupPolicy.js';
 import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
 import { buildMeetConferenceData, hasExistingConference } from '../google-calendar/conferenceFormatter.js';
 
@@ -52,6 +53,12 @@ function registerInstanceResourceMetadata(app: express.Express, baseUrl: string,
     if (!instanceId) { res.status(404).json({ error: 'not_found' }); return; }
     sendProtectedResourceMetadata(res, `${baseUrl}${mount}/${instanceId}`, baseUrl, scopes);
   });
+}
+
+/** mapJwtToUser refused the identity (sign-up domain, unverified email): final, never retryable. */
+function isIdentityRefusal(err: unknown): err is Error {
+  const name = (err as any)?.name;
+  return name === 'SignupNotAllowedError' || name === 'UnverifiedEmailError';
 }
 
 /** Register OAuth discovery + proxy endpoints (RFC 9728 + RFC 8414 + /authorize, /token, /register). */
@@ -1602,6 +1609,21 @@ function registerSharedRoutes(app: express.Express): void {
       // Get existing user to preserve refresh_token if Google didn't send a new one
       const existingUser = await getUserByGoogleId(profile.id);
 
+      // createOrUpdateUser links by email and creates when nothing matches, so
+      // the verified-email and sign-up-domain rules must run before it.
+      const decision = decideGoogleSignIn({
+        email: profile.email,
+        emailVerified: profile.verified_email,
+        byGoogleId: existingUser,
+        byEmail: existingUser ? undefined : await getUserByEmail(profile.email),
+      });
+      if (!decision.allowed) {
+        console.error(`[auth/callback] Google sign-in refused: ${decision.reason}`);
+        // Plain text: the message carries the address Google returned.
+        res.status(403).type('text/plain').send(decision.message);
+        return;
+      }
+
       const user = await createOrUpdateUser(
         {
           email: profile.email,
@@ -1731,6 +1753,12 @@ function registerSharedRoutes(app: express.Express): void {
         res.status(400).json({ error: policyError });
         return;
       }
+      // Decided by the domain alone, before any lookup, so the answer says
+      // nothing about whether the address already has an account.
+      if (!isSignupAllowed(email)) {
+        res.status(403).json({ error: SIGNUP_NOT_ALLOWED_MESSAGE, code: 'signup_domain_not_allowed' });
+        return;
+      }
 
       const gate = await guardAttempt(req, email);
       if (!gate.allowed) {
@@ -1838,6 +1866,13 @@ function registerSharedRoutes(app: express.Express): void {
         // Unknown, already used, and expired are deliberately one answer:
         // distinguishing them tells a probe which tokens once existed.
         failure('invalid');
+        return;
+      }
+
+      // Checked again here: the list may have changed while the link waited.
+      // The record stays consumed; the link can never succeed now.
+      if (!isSignupAllowed(pending.email)) {
+        failure('domain');
         return;
       }
 
@@ -4508,7 +4543,12 @@ function registerRestApiRoutes(app: express.Express): void {
         const payload = await validateJwt(token);
         const jwtUser = await mapJwtToUser(payload);
         return jwtUser ? { user: jwtUser } : null;
-      } catch { /* not a valid JWT — try next */ }
+      } catch (err) {
+        // A valid token whose identity we refuse is not a bad bearer:
+        // createServiceAuth answers it with 403, never "Invalid token".
+        if (isIdentityRefusal(err)) throw err;
+        /* not a valid JWT — try next */
+      }
     }
 
     // Try short-lived REST token (5-min, minted by mintRestBearerForCurl MCP tool)
@@ -4531,7 +4571,10 @@ function registerRestApiRoutes(app: express.Express): void {
       const payload = await validateOpaqueToken(token);
       const opaqueUser = await mapJwtToUser(payload);
       return opaqueUser ? { user: opaqueUser } : null;
-    } catch { /* not a valid opaque token either */ }
+    } catch (err) {
+      if (isIdentityRefusal(err)) throw err;
+      /* not a valid opaque token either */
+    }
 
     return null;
   }
@@ -4733,6 +4776,14 @@ function registerRestApiRoutes(app: express.Express): void {
         req.user = user;
         next();
       } catch (err: any) {
+        // The bearer is fine; the account it names is refused. A 401 here
+        // would tell the client its token is bad and send it round a
+        // re-authentication loop (root CLAUDE.md: a REST 401 means a bad bearer).
+        if (isIdentityRefusal(err)) {
+          const error = err.name === 'SignupNotAllowedError' ? 'signup_domain_not_allowed' : 'email_not_verified';
+          res.status(403).json({ error, message: err.message });
+          return;
+        }
         console.error(`[${primarySlug}] REST API auth error:`, err.message);
         res.status(500).json({ error: 'Authentication failed' });
       }

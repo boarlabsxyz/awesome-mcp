@@ -113,6 +113,10 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
           res.status(403).json({ error: 'email_not_verified', message: err.message });
           return;
         }
+        if (err?.name === 'SignupNotAllowedError') {
+          res.status(403).json({ error: 'signup_domain_not_allowed', message: err.message });
+          return;
+        }
         res.status(503).json({
           error: 'user_mapping_error',
           message: 'Failed to resolve user identity. Please try again.',
@@ -151,6 +155,10 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
           console.error('[oauth] User mapping failed:', err.message);
           if (err?.name === 'UnverifiedEmailError') {
             res.status(403).json({ error: 'email_not_verified', message: err.message });
+            return;
+          }
+          if (err?.name === 'SignupNotAllowedError') {
+            res.status(403).json({ error: 'signup_domain_not_allowed', message: err.message });
             return;
           }
           res.status(503).json({
