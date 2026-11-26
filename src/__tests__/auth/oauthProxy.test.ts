@@ -600,6 +600,44 @@ describe('OAuth proxy routes (real app)', () => {
       assert.match(String(after.headers['www-authenticate']), /resource_metadata=.*error="invalid_token"/);
     });
 
+    it('refuses a revoked token on an open session in the default DUAL_AUTH_MODE too', async () => {
+      // The file pins DUAL_AUTH_MODE=false; the default (unset) is dual mode,
+      // where the edge used to forward these unchecked and FastMCP, which
+      // authenticates a session only at initialize, kept serving it.
+      const { verifier, challenge } = makePKCE();
+      const code = crypto.randomBytes(16).toString('hex');
+      await storeAuthCode(code, {
+        userId: testUser.id, clientId: 'dual-client', codeChallenge: challenge, codeChallengeMethod: 'S256',
+        redirectUri: 'https://example.com/cb', expiresAt: Date.now() + 600_000,
+      });
+      const tok = await request(app).post('/oauth/token').type('form')
+        .send({ grant_type: 'authorization_code', code, code_verifier: verifier });
+      const saved = process.env.DUAL_AUTH_MODE;
+      delete process.env.DUAL_AUTH_MODE;
+      try {
+        const live = await request(app).post('/mcp').set('Authorization', `Bearer ${tok.body.access_token}`);
+        assert.notEqual(live.status, 401);
+        await revokeClient(testUser.id, 'dual-client');
+        const after = await request(app).post('/mcp')
+          .set('Authorization', `Bearer ${tok.body.access_token}`)
+          .set('Mcp-Session-Id', 'an-open-session');
+        assert.equal(after.status, 401);
+        assert.match(String(after.headers['www-authenticate']), /error="invalid_token"/);
+      } finally {
+        if (saved === undefined) delete process.env.DUAL_AUTH_MODE; else process.env.DUAL_AUTH_MODE = saved;
+      }
+    });
+
+    it('clamps an oversized client_name at registration', async () => {
+      const res = await request(app).post('/oauth/register')
+        .send({ client_name: 'x'.repeat(5000), redirect_uris: ['https://example.com/cb'] });
+      assert.equal(res.status, 201);
+      assert.equal(res.body.client_name.length, 100);
+      const odd = await request(app).post('/oauth/register')
+        .send({ client_name: { evil: true }, redirect_uris: ['https://example.com/cb'] });
+      assert.equal(odd.body.client_name, 'MCP Client');
+    });
+
     it('never treats an unknown amcp_at_ token as an API key', async () => {
       const res = await request(app).post('/mcp').set('Authorization', 'Bearer amcp_at_madeup');
       assert.equal(res.status, 401);

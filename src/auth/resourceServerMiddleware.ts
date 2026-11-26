@@ -6,7 +6,8 @@ import { validateJwt, validateOpaqueToken, hasScope, type JwtPayload } from './j
 import { getRequiredScope } from './scopeMap.js';
 import { mapJwtToUser } from './userMapping.js';
 import { resourceMetadataUrl } from '../mcpInstancePath.js';
-import type { UserRecord } from '../userStore.js';
+import { getUserById, type UserRecord } from '../userStore.js';
+import { isOAuthAccessToken, lookupAccessToken } from '../website/oauthTokenStore.js';
 
 /** Dependencies for the middleware, injectable for testing. */
 export interface MiddlewareDeps {
@@ -15,9 +16,18 @@ export interface MiddlewareDeps {
   hasScope: (payload: JwtPayload, scope: string) => boolean;
   getRequiredScope: (path: string) => string | null;
   mapJwtToUser: (payload: JwtPayload) => Promise<UserRecord>;
+  /** The live user behind one of our OAuth access tokens (`amcp_at_…`), or null. */
+  resolveOAuthAccessToken?: (token: string) => Promise<UserRecord | null>;
 }
 
-const defaultDeps: MiddlewareDeps = { validateJwt, validateOpaqueToken, hasScope, getRequiredScope, mapJwtToUser };
+async function resolveOAuthAccessToken(token: string): Promise<UserRecord | null> {
+  const record = await lookupAccessToken(token);
+  return record ? (await getUserById(record.userId)) ?? null : null;
+}
+
+const defaultDeps: MiddlewareDeps = {
+  validateJwt, validateOpaqueToken, hasScope, getRequiredScope, mapJwtToUser, resolveOAuthAccessToken,
+};
 
 /** Detect whether a bearer token is a JWT (vs an API key). */
 export function looksLikeJwt(token: string): boolean {
@@ -72,6 +82,33 @@ export function createResourceServerMiddleware(deps: MiddlewareDeps = defaultDep
     }
 
     const token = authHeader.slice(7);
+
+    // One of our own OAuth access tokens: decided here, on EVERY request and
+    // in both auth modes. The dual-mode path below would pass it on
+    // unchecked, and FastMCP authenticates a session only at `initialize`, so
+    // a token revoked or expired mid-session would keep working. A 401 with
+    // WWW-Authenticate is what makes the client refresh.
+    if (isOAuthAccessToken(token)) {
+      let user: UserRecord | null;
+      try {
+        user = await (deps.resolveOAuthAccessToken ?? resolveOAuthAccessToken)(token);
+      } catch (err: any) {
+        console.error('[oauth] Access token lookup failed:', err?.message || err);
+        res.status(503).json({ error: 'temporarily_unavailable', message: 'Could not check the access token. Please try again.' });
+        return;
+      }
+      if (!user?.id) {
+        res.status(401).setHeader('WWW-Authenticate', `${wwwAuth}, error="invalid_token"`).json({
+          error: 'invalid_token',
+          message: 'Access token expired or revoked. Refresh it or authorize again.',
+        });
+        return;
+      }
+      req.headers['x-mcp-user-id'] = String(user.id);
+      if (user.email) req.headers['x-mcp-user-email'] = user.email;
+      next();
+      return;
+    }
 
     if (looksLikeJwt(token)) {
       // Step 1: Validate token and check scopes (401 on failure)

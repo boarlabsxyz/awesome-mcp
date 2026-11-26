@@ -60,25 +60,24 @@ async function storeAuthCode(code: string, data: OAuthAuthCode): Promise<void> {
   }
 }
 
-async function getAuthCode(code: string): Promise<OAuthAuthCode | null> {
+/**
+ * Read AND delete a code in one step, before it is validated. Read-then-delete
+ * let two concurrent exchanges of the same code both succeed, each minting its
+ * own token family. A code that fails validation is spent too: it is
+ * single-use either way (RFC 6749 §4.1.2).
+ */
+async function consumeAuthCode(code: string): Promise<OAuthAuthCode | null> {
   if (isDatabaseAvailable()) {
-    const raw = await getRedis().get(`oauth:code:${code}`);
+    const key = `oauth:code:${code}`;
+    const result = await getRedis().multi().get(key).del(key).exec();
+    const raw = result?.[0]?.[1] as string | null | undefined;
     return raw ? JSON.parse(raw) : null;
   }
+  // No await between the read and the delete: atomic within this process.
   const data = memoryAuthCodes.get(code);
-  if (data && data.expiresAt < Date.now()) {
-    memoryAuthCodes.delete(code);
-    return null;
-  }
-  return data ?? null;
-}
-
-async function deleteAuthCode(code: string): Promise<void> {
-  if (isDatabaseAvailable()) {
-    await getRedis().del(`oauth:code:${code}`);
-  } else {
-    memoryAuthCodes.delete(code);
-  }
+  memoryAuthCodes.delete(code);
+  if (!data || data.expiresAt < Date.now()) return null;
+  return data;
 }
 
 async function storeClient(client: OAuthClient): Promise<void> {
@@ -150,7 +149,7 @@ export async function exchangeAuthCode(params: {
     return { ok: false, status: 400, error: 'invalid_request', errorDescription: 'Missing code or code_verifier' };
   }
 
-  const authCode = await getAuthCode(code);
+  const authCode = await consumeAuthCode(code);
   if (!authCode) {
     return { ok: false, status: 400, error: 'invalid_grant', errorDescription: 'Authorization code expired or invalid' };
   }
@@ -164,7 +163,6 @@ export async function exchangeAuthCode(params: {
     return { ok: false, status: 400, error: 'invalid_grant', errorDescription: 'PKCE verification failed' };
   }
 
-  await deleteAuthCode(code);
 
   let userId = authCode.userId;
   if (!userId && authCode.apiKey) {

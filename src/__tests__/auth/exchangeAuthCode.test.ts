@@ -3,7 +3,7 @@ import { describe, it, mock, beforeEach } from 'node:test';
 import crypto from 'crypto';
 
 // We need to mock the storage layer before importing exchangeAuthCode.
-// Since exchangeAuthCode uses module-level imports (getAuthCode, deleteAuthCode, verifyPKCE),
+// Since exchangeAuthCode uses module-level imports (consumeAuthCode, verifyPKCE),
 // we test it indirectly through the exported function with pre-seeded auth codes.
 import { exchangeAuthCode, storeAuthCode } from '../../website/oauthServer.js';
 
@@ -153,6 +153,23 @@ describe('exchangeAuthCode', () => {
       assert.equal(result.scope, 'mcp:slack');
       assert.equal(result.clientId, 'client-1');
     }
+  });
+
+  it('lets only one of two concurrent exchanges of the same code succeed', async () => {
+    const code = crypto.randomBytes(16).toString('hex');
+    const { verifier } = await seedAuthCode(code);
+    const params = { grant_type: 'authorization_code', code, code_verifier: verifier };
+    const results = await Promise.all([exchangeAuthCode(params), exchangeAuthCode(params)]);
+    assert.equal(results.filter(r => r.ok).length, 1);
+  });
+
+  it('spends a code even when the exchange fails validation', async () => {
+    const code = crypto.randomBytes(16).toString('hex');
+    const { verifier } = await seedAuthCode(code);
+    const wrong = await exchangeAuthCode({ grant_type: 'authorization_code', code, code_verifier: 'wrong' });
+    assert.equal(wrong.ok, false);
+    const retry = await exchangeAuthCode({ grant_type: 'authorization_code', code, code_verifier: verifier });
+    assert.equal(retry.ok, false, 'single-use: a failed attempt burns it (RFC 6749 §4.1.2)');
   });
 
   it('uses default scope "mcp" when auth code has no scope', async () => {

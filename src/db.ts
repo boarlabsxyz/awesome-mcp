@@ -209,7 +209,7 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   kind         VARCHAR(10) NOT NULL CHECK (kind IN ('access', 'refresh')),
   user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   client_id    VARCHAR(255) NOT NULL,
-  client_name  VARCHAR(255),
+  client_name  TEXT,
   scope        TEXT NOT NULL DEFAULT 'mcp',
   family_id    UUID NOT NULL,
   expires_at   TIMESTAMPTZ NOT NULL,

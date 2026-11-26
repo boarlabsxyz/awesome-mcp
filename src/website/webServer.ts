@@ -122,7 +122,12 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
   // Dynamic Client Registration (RFC 7591)
   app.post('/oauth/register', express.json(), async (req, res) => {
     try {
-      const { client_name, redirect_uris } = req.body;
+      const { redirect_uris } = req.body;
+      // Anyone can register a client, and its name is shown on the dashboard
+      // and stored with every token: keep it a short string (100 characters).
+      const client_name = typeof req.body.client_name === 'string'
+        ? req.body.client_name.trim().slice(0, 100) || undefined
+        : undefined;
       if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
         res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris is required' });
         return;
