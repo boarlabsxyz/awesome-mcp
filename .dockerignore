@@ -1,12 +1,14 @@
-# Docker ignore file for Railway deployment
+# Docker ignore file for Railway deployment.
+# The Dockerfile copies only package*.json, tsconfig.json, src and public, so
+# this list is the second line of defence: it keeps local state and secrets out
+# of the build context altogether.
+
 node_modules
 npm-debug.log
 .git
 .gitignore
 *.md
 !README.md
-.env
-.env.*
 tests
 *.test.ts
 *.spec.ts
@@ -18,6 +20,20 @@ assets
 .repomix
 repomix-output.txt.xml
 
-# Don't ignore credentials for deployment (but use env vars instead!)
-# credentials.json
-# token.json
+# Local state and secrets: the file-fallback stores (users, connection tokens,
+# catalog secrets) live in data/, and the stdio auth path writes token.json.
+data
+.env
+.env.*
+credentials.json
+token.json
+*.pem
+
+# Build output and tooling that never belongs in the image.
+dist
+coverage
+e2e
+.claude
+.github
+.planning
+scripts
