@@ -18,6 +18,7 @@
 //   pruneOldTaskEvents(retentionDays)      — nightly cleanup
 
 import { isDatabaseAvailable, getPool } from '../db.js';
+import { sealString, openString } from '../util/secretBox.js';
 
 export interface ClickUpWebhookSubscription {
   id: number;
@@ -58,7 +59,8 @@ function mapSubscriptionRow(row: any): ClickUpWebhookSubscription {
     userId: row.user_id,
     workspaceId: row.workspace_id,
     clickupWebhookId: row.clickup_webhook_id,
-    sharedSecret: row.shared_secret,
+    // Sealed at rest when TOKEN_ENCRYPTION_KEYS is set (src/util/secretBox.ts).
+    sharedSecret: openString(row.shared_secret),
     events: Array.isArray(row.events) ? row.events : JSON.parse(row.events || '[]'),
     status: row.status,
     failCount: row.fail_count,
@@ -109,7 +111,7 @@ export async function createSubscription(input: {
        (user_id, workspace_id, clickup_webhook_id, shared_secret, events, status, fail_count)
      VALUES ($1, $2, $3, $4, $5, 'active', 0)
      RETURNING id, user_id, workspace_id, clickup_webhook_id, shared_secret, events, status, fail_count, created_at, updated_at`,
-    [input.userId, input.workspaceId, input.clickupWebhookId, input.sharedSecret, JSON.stringify(input.events)],
+    [input.userId, input.workspaceId, input.clickupWebhookId, sealString(input.sharedSecret), JSON.stringify(input.events)],
   );
   return mapSubscriptionRow(rows[0]);
 }

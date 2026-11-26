@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 import { isDatabaseAvailable, getPool, getRedis } from './db.js';
+import { sealJson, openJson, sealString, openString } from './util/secretBox.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const CONNECTIONS_FILE = path.join(DATA_DIR, 'mcp-connections.json');
@@ -107,7 +108,11 @@ async function fileLoadConnections(): Promise<void> {
   await ensureDataDir();
   try {
     const content = await fs.readFile(CONNECTIONS_FILE, 'utf-8');
-    connections = JSON.parse(content);
+    connections = (JSON.parse(content) as FileConnection[]).map(c => ({
+      ...c,
+      googleTokens: c.googleTokens ? openJson(c.googleTokens) : c.googleTokens,
+      providerTokens: c.providerTokens ? openJson(c.providerTokens) : c.providerTokens,
+    }));
     nextId = connections.length > 0 ? Math.max(...connections.map(c => c.id)) + 1 : 1;
     loaded = true;
     console.error(`Loaded ${connections.length} MCP connection(s) from ${CONNECTIONS_FILE}`);
@@ -125,7 +130,13 @@ async function fileLoadConnections(): Promise<void> {
 async function saveConnections(): Promise<void> {
   writeLock = writeLock.then(async () => {
     await ensureDataDir();
-    await fs.writeFile(CONNECTIONS_FILE, JSON.stringify(connections, null, 2));
+    // Sealed on disk like in Postgres; the in-memory list stays plaintext.
+    const onDisk = connections.map(c => ({
+      ...c,
+      googleTokens: sealJson(c.googleTokens),
+      providerTokens: c.providerTokens ? sealJson(c.providerTokens) : c.providerTokens,
+    }));
+    await fs.writeFile(CONNECTIONS_FILE, JSON.stringify(onDisk, null, 2));
   });
   await writeLock;
 }
@@ -289,15 +300,30 @@ async function fileDisconnectMcpInstance(instanceId: string): Promise<boolean> {
 
 // ---------- Database-backed storage ----------
 
+// Credentials are sealed at rest (src/util/secretBox.ts) whenever
+// TOKEN_ENCRYPTION_KEYS is set: every write below goes through these, every
+// read through mapDbRowToConnection or openCachedTokens. Plaintext rows from
+// before encryption still read; initDatabase seals them (sealExistingSecrets).
+
+/** The JSON text for a google_tokens / provider_tokens parameter. */
+function tokensParam(tokens: unknown): string {
+  return JSON.stringify(sealJson(tokens));
+}
+
+/** The Redis cache value for an instance's Google tokens. */
+function cachedTokensValue(tokens: unknown): string {
+  return sealString(JSON.stringify(tokens));
+}
+
+function openCachedTokens(cached: string): GoogleTokens {
+  return JSON.parse(openString(cached));
+}
+
 function mapDbRowToConnection(row: any): McpConnection {
-  const googleTokens = typeof row.google_tokens === 'string'
-    ? JSON.parse(row.google_tokens)
-    : row.google_tokens;
+  const googleTokens = row.google_tokens ? openJson(row.google_tokens) : row.google_tokens;
   let providerTokens: ProviderTokens | undefined;
   if (row.provider_tokens) {
-    providerTokens = typeof row.provider_tokens === 'string'
-      ? JSON.parse(row.provider_tokens)
-      : row.provider_tokens;
+    providerTokens = openJson<ProviderTokens>(row.provider_tokens);
   }
   return {
     id: row.id,
@@ -342,13 +368,13 @@ async function dbConnectMcp(
          SET google_tokens = $1, google_email = COALESCE($2, google_email), updated_at = NOW()
          WHERE id = $3
          RETURNING id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at`,
-        [JSON.stringify(tokens), googleEmail, existing[0].id]
+        [tokensParam(tokens), googleEmail, existing[0].id]
       );
       const row = rows[0];
 
       await redis.set(
         `mcp_tokens:instance:${row.instance_id}`,
-        JSON.stringify(tokens),
+        cachedTokensValue(tokens),
         'EX',
         3600
       );
@@ -365,7 +391,7 @@ async function dbConnectMcp(
     `INSERT INTO mcp_connections (user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
      RETURNING id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at`,
-    [userId, mcpSlug, instanceId, finalInstanceName, googleEmail || null, JSON.stringify(tokens)]
+    [userId, mcpSlug, instanceId, finalInstanceName, googleEmail || null, tokensParam(tokens)]
   );
 
   const row = rows[0];
@@ -373,7 +399,7 @@ async function dbConnectMcp(
   // Cache tokens in Redis for fast lookup by instanceId
   await redis.set(
     `mcp_tokens:instance:${row.instance_id}`,
-    JSON.stringify(tokens),
+    cachedTokensValue(tokens),
     'EX',
     3600 // 1 hour cache
   );
@@ -448,14 +474,14 @@ async function dbUpdateMcpTokens(
     `UPDATE mcp_connections
      SET google_tokens = $1, updated_at = NOW()
      WHERE user_id = $2 AND mcp_slug = $3`,
-    [JSON.stringify(mergedTokens), userId, mcpSlug]
+    [tokensParam(mergedTokens), userId, mcpSlug]
   );
 
   // Update cache by instanceId
   if (connection.instanceId) {
     await redis.set(
       `mcp_tokens:instance:${connection.instanceId}`,
-      JSON.stringify(mergedTokens),
+      cachedTokensValue(mergedTokens),
       'EX',
       3600
     );
@@ -483,7 +509,7 @@ async function dbGetMcpConnectionByInstanceId(
     }
     const row = rows[0];
     const conn = mapDbRowToConnection(row);
-    conn.googleTokens = JSON.parse(cached);
+    conn.googleTokens = openCachedTokens(cached);
     return conn;
   }
 
@@ -502,7 +528,7 @@ async function dbGetMcpConnectionByInstanceId(
   // Cache for future lookups
   await redis.set(
     `mcp_tokens:instance:${instanceId}`,
-    JSON.stringify(conn.googleTokens),
+    cachedTokensValue(conn.googleTokens),
     'EX',
     3600
   );
@@ -529,7 +555,7 @@ async function dbCreateMcpInstance(
     `INSERT INTO mcp_connections (user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at, provider, provider_tokens, provider_email)
      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW(), $7, $8, $9)
      RETURNING id, user_id, mcp_slug, instance_id, instance_name, google_email, google_tokens, connected_at, updated_at, provider, provider_tokens, provider_email`,
-    [userId, mcpSlug, instanceId, instanceName, googleEmail, JSON.stringify(tokens), provider || 'google', providerTokens ? JSON.stringify(providerTokens) : null, providerEmail || null]
+    [userId, mcpSlug, instanceId, instanceName, googleEmail, tokensParam(tokens), provider || 'google', providerTokens ? tokensParam(providerTokens) : null, providerEmail || null]
   );
 
   const row = rows[0];
@@ -537,7 +563,7 @@ async function dbCreateMcpInstance(
   // Cache tokens in Redis
   await redis.set(
     `mcp_tokens:instance:${instanceId}`,
-    JSON.stringify(tokens),
+    cachedTokensValue(tokens),
     'EX',
     3600
   );
@@ -609,13 +635,13 @@ async function dbUpdateMcpInstanceTokens(
     `UPDATE mcp_connections
      SET google_tokens = $1, updated_at = NOW()
      WHERE instance_id = $2`,
-    [JSON.stringify(mergedTokens), instanceId]
+    [tokensParam(mergedTokens), instanceId]
   );
 
   // Update cache
   await redis.set(
     `mcp_tokens:instance:${instanceId}`,
-    JSON.stringify(mergedTokens),
+    cachedTokensValue(mergedTokens),
     'EX',
     3600
   );
@@ -759,12 +785,91 @@ export async function updateMcpInstanceTokens(
   }
 }
 
+/** keepIfAbsent semantics: the kept keys the row holds (non-null), overlaid by `fresh`. */
+function mergeKeepingAbsent(
+  current: Record<string, unknown>,
+  fresh: Record<string, unknown>,
+  keep: readonly string[],
+): Record<string, unknown> {
+  const carried: Record<string, unknown> = {};
+  for (const key of keep) {
+    if (current[key] !== undefined && current[key] !== null) carried[key] = current[key];
+  }
+  return { ...carried, ...fresh };
+}
+
+/**
+ * patch semantics: null when an expected key no longer holds its value
+ * (null = absent), else `current` with `changes` set and `removed` deleted.
+ */
+function applyProviderTokensPatch(
+  current: Record<string, unknown>,
+  changes: Record<string, unknown>,
+  removed: readonly string[],
+  expected: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (expected && Object.entries(expected).some(([key, value]) => stableJson(current[key] ?? null) !== stableJson(value))) {
+    return null;
+  }
+  const next: Record<string, unknown> = { ...current, ...changes };
+  for (const key of removed) delete next[key];
+  return next;
+}
+
+/**
+ * Read-modify-write of one row's provider_tokens under a row lock.
+ *
+ * These merges used to run inside the UPDATE, on jsonb keys. A sealed column
+ * is one opaque value, so the merge now happens here, in a transaction that
+ * holds the row (`SELECT ... FOR UPDATE`) from the read to the write: two
+ * writers owning different keys (a token refresh, a settings save) still
+ * cannot undo each other, which is what the in-SQL merge guaranteed. `merge`
+ * returns null to write nothing. Resolves false when the row is gone or
+ * nothing was written.
+ */
+async function withLockedProviderTokens(
+  instanceId: string,
+  merge: (current: Record<string, unknown>) => Record<string, unknown> | null,
+): Promise<boolean> {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      'SELECT provider_tokens FROM mcp_connections WHERE instance_id = $1 FOR UPDATE',
+      [instanceId],
+    );
+    if (rows.length === 0) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    const current = (rows[0].provider_tokens ? openJson(rows[0].provider_tokens) : {}) as Record<string, unknown>;
+    const next = merge(current ?? {});
+    if (next === null) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    await client.query(
+      'UPDATE mcp_connections SET provider_tokens = $1, updated_at = NOW() WHERE instance_id = $2',
+      // Round-trip through JSON so the stored value matches what the old
+      // jsonb merge stored (undefined dropped, Dates as strings).
+      [tokensParam(JSON.parse(JSON.stringify(next))), instanceId],
+    );
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Replaces provider_tokens whole.
  *
  * `keepIfAbsent` names keys to carry over from the row AS IT IS AT WRITE TIME
  * whenever `providerTokens` leaves them empty (undefined, null or ''). The
- * carry happens inside the UPDATE, not from an earlier read, so a reconnect
+ * carry happens under the row lock, not from an earlier read, so a reconnect
  * cannot drop a setting saved while it ran.
  */
 export async function updateMcpInstanceProviderTokens(
@@ -778,25 +883,14 @@ export async function updateMcpInstanceProviderTokens(
     if (fresh[key] === undefined || fresh[key] === null || fresh[key] === '') delete fresh[key];
   }
   if (isDatabaseAvailable()) {
-    const pool = getPool();
-    await pool.query(
-      `UPDATE mcp_connections SET provider_tokens = COALESCE((
-         SELECT jsonb_object_agg(k, provider_tokens -> k) FROM unnest($3::text[]) AS k
-          WHERE provider_tokens ? k AND jsonb_typeof(provider_tokens -> k) <> 'null'
-       ), '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE instance_id = $2`,
-      [JSON.stringify(fresh), instanceId, keep]
-    );
+    await withLockedProviderTokens(instanceId, current => mergeKeepingAbsent(current, fresh, keep));
   } else {
     // File-based: find and update by instanceId
     await fileLoadConnections();
     const connection = connections.find(c => c.instanceId === instanceId);
     if (connection) {
       const current = (connection.providerTokens ?? {}) as Record<string, unknown>;
-      const carried: Record<string, unknown> = {};
-      for (const key of keep) {
-        if (current[key] !== undefined && current[key] !== null) carried[key] = current[key];
-      }
-      connection.providerTokens = { ...carried, ...fresh } as unknown as ProviderTokens;
+      connection.providerTokens = mergeKeepingAbsent(current, fresh, keep) as unknown as ProviderTokens;
       connection.updatedAt = new Date().toISOString();
       await saveConnections();
     }
@@ -805,9 +899,9 @@ export async function updateMcpInstanceProviderTokens(
 
 /**
  * Sets the given provider_tokens keys and deletes those given as undefined,
- * leaving every other key as the row has it at write time. One statement, so
- * two writers that own different keys (a token refresh, a settings save)
- * cannot undo each other the way read, spread and replace can.
+ * leaving every other key as the row has it at write time. Done under a row
+ * lock, so two writers that own different keys (a token refresh, a settings
+ * save) cannot undo each other the way read, spread and replace can.
  *
  * `expect` makes it a compare-and-set, for a writer that merged into what it
  * read: the write happens only while each named key still holds that value
@@ -821,34 +915,18 @@ export async function patchMcpInstanceProviderTokens(
   opts: { expect?: Record<string, unknown> } = {}
 ): Promise<boolean> {
   const removed = Object.keys(changes).filter(key => changes[key] === undefined);
-  // JSON null stands for "absent": a missing key reads back as SQL NULL,
-  // which the COALESCE below turns into the same JSON null.
+  // JSON null stands for "absent", so an expected undefined matches a missing key.
   const expected = opts.expect
     ? Object.fromEntries(Object.entries(opts.expect).map(([key, value]) => [key, value ?? null]))
     : null;
   if (isDatabaseAvailable()) {
-    const pool = getPool();
-    const result = await pool.query(
-      `UPDATE mcp_connections SET provider_tokens = (COALESCE(provider_tokens, '{}'::jsonb) - $3::text[]) || $1::jsonb,
-         updated_at = NOW()
-       WHERE instance_id = $2
-         AND ($4::jsonb IS NULL OR NOT EXISTS (
-           SELECT 1 FROM jsonb_each($4::jsonb) AS e
-            WHERE COALESCE(provider_tokens -> e.key, 'null'::jsonb) <> e.value
-         ))`,
-      [JSON.stringify(changes), instanceId, removed, expected ? JSON.stringify(expected) : null]
-    );
-    return (result.rowCount ?? 0) > 0;
+    return withLockedProviderTokens(instanceId, current => applyProviderTokensPatch(current, changes, removed, expected));
   }
   await fileLoadConnections();
   const connection = connections.find(c => c.instanceId === instanceId);
   if (!connection) return false;
-  const current = (connection.providerTokens ?? {}) as Record<string, unknown>;
-  if (expected && Object.entries(expected).some(([key, value]) => stableJson(current[key] ?? null) !== stableJson(value))) {
-    return false;
-  }
-  const next: Record<string, unknown> = { ...current, ...changes };
-  for (const key of removed) delete next[key];
+  const next = applyProviderTokensPatch((connection.providerTokens ?? {}) as Record<string, unknown>, changes, removed, expected);
+  if (next === null) return false;
   connection.providerTokens = next as unknown as ProviderTokens;
   connection.updatedAt = new Date().toISOString();
   await saveConnections();

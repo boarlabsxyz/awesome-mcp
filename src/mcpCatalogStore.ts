@@ -5,6 +5,7 @@ import * as path from 'path';
 import { isDatabaseAvailable, getPool } from './db.js';
 import { GITHUB_AUTHORIZE_URL, GITHUB_TOKEN_URL, GITHUB_OAUTH_SCOPES } from './github/oauthCallback.js';
 import { SUPABASE_AUTHORIZE_URL, SUPABASE_TOKEN_URL } from './supabase/oauthCallback.js';
+import { sealString, openOptionalString } from './util/secretBox.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const CATALOG_FILE = path.join(DATA_DIR, 'mcp-catalog.json');
@@ -45,7 +46,10 @@ async function fileLoadCatalog(): Promise<void> {
   await ensureDataDir();
   try {
     const content = await fs.readFile(CATALOG_FILE, 'utf-8');
-    catalog = JSON.parse(content);
+    catalog = (JSON.parse(content) as McpCatalogEntry[]).map(e => ({
+      ...e,
+      googleClientSecret: openOptionalString(e.googleClientSecret),
+    }));
     nextId = catalog.length > 0 ? Math.max(...catalog.map(e => e.id)) + 1 : 1;
     loaded = true;
     console.error(`Loaded ${catalog.length} MCP catalog entries from ${CATALOG_FILE}`);
@@ -63,7 +67,11 @@ async function fileLoadCatalog(): Promise<void> {
 async function saveCatalog(): Promise<void> {
   writeLock = writeLock.then(async () => {
     await ensureDataDir();
-    await fs.writeFile(CATALOG_FILE, JSON.stringify(catalog, null, 2));
+    const onDisk = catalog.map(e => ({
+      ...e,
+      googleClientSecret: e.googleClientSecret ? sealString(e.googleClientSecret) : e.googleClientSecret,
+    }));
+    await fs.writeFile(CATALOG_FILE, JSON.stringify(onDisk, null, 2));
   });
   await writeLock;
 }
@@ -187,7 +195,7 @@ async function dbCreateMcpCatalog(
        oauth_authorization_url = COALESCE(EXCLUDED.oauth_authorization_url, mcp_catalog.oauth_authorization_url),
        oauth_token_url = COALESCE(EXCLUDED.oauth_token_url, mcp_catalog.oauth_token_url)
      RETURNING id, slug, name, description, icon_url, mcp_url, scopes, google_client_id, google_client_secret, oauth_scopes, is_local, is_active, created_at, updated_at, provider, oauth_authorization_url, oauth_token_url`,
-    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret || null, oauthScopesJson, entry.isLocal, entry.isActive, now, entry.provider || 'google', entry.oauthAuthorizationUrl ?? null, entry.oauthTokenUrl ?? null]
+    [entry.slug, entry.name, entry.description, entry.iconUrl, entry.mcpUrl, scopesJson, entry.googleClientId || null, entry.googleClientSecret ? sealString(entry.googleClientSecret) : null, oauthScopesJson, entry.isLocal, entry.isActive, now, entry.provider || 'google', entry.oauthAuthorizationUrl ?? null, entry.oauthTokenUrl ?? null]
   );
 
   return mapRowToEntry(rows[0]);
@@ -219,7 +227,8 @@ function mapRowToEntry(row: any): McpCatalogEntry {
     mcpUrl: row.mcp_url,
     scopes,
     googleClientId: row.google_client_id || null,
-    googleClientSecret: row.google_client_secret || null,
+    // Sealed at rest when TOKEN_ENCRYPTION_KEYS is set (src/util/secretBox.ts).
+    googleClientSecret: openOptionalString(row.google_client_secret) || null,
     oauthScopes,
     isLocal: row.is_local,
     isActive: row.is_active,

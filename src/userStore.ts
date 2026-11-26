@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { isDatabaseAvailable, getPool, getRedis, initDatabase } from './db.js';
+import { sealString, openString, sealJson, openJson, lookupHash, isEncryptionEnabled } from './util/secretBox.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -63,7 +64,13 @@ async function fileLoadUsers(): Promise<void> {
   await ensureDataDir();
   try {
     const content = await fs.readFile(USERS_FILE, 'utf-8');
-    users = JSON.parse(content);
+    // Re-key by the opened API key: on disk the key may be sealed and the
+    // map keyed by its hash (saveUsers), or plaintext from before encryption.
+    users = {};
+    for (const stored of Object.values(JSON.parse(content) as Record<string, UserRecord>)) {
+      const apiKey = openString(stored.apiKey);
+      users[apiKey] = { ...stored, apiKey, tokens: stored.tokens ? openJson(stored.tokens) : stored.tokens };
+    }
     // Restore auto-increment counter from existing user IDs
     const maxId = Math.max(0, ...Object.values(users).map(u => u.id ?? 0));
     nextFileUserId = maxId + 1;
@@ -83,7 +90,17 @@ async function fileLoadUsers(): Promise<void> {
 async function saveUsers(): Promise<void> {
   writeLock = writeLock.then(async () => {
     await ensureDataDir();
-    await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+    // Sealed on disk like in Postgres: no API key or token in the clear, and
+    // the map is keyed by the key's hash instead of the key itself.
+    const onDisk: Record<string, unknown> = {};
+    for (const [apiKey, user] of Object.entries(users)) {
+      onDisk[isEncryptionEnabled() ? lookupHash(apiKey) : apiKey] = {
+        ...user,
+        apiKey: sealString(apiKey),
+        tokens: user.tokens ? sealJson(user.tokens) : user.tokens,
+      };
+    }
+    await fs.writeFile(USERS_FILE, JSON.stringify(onDisk, null, 2));
   });
   await writeLock;
 }
@@ -158,19 +175,45 @@ async function fileUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Pr
 
 const DB_USER_COLUMNS = 'id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at';
 
+// The API key is stored sealed (src/util/secretBox.ts) when sealing is on, so
+// it cannot be matched in SQL. Lookups find candidates by api_key_hash, its
+// SHA-256 (32 random bytes: no work factor needed), or by the plaintext column
+// (a key written by a replica on older code during a rolling deploy), and then
+// CONFIRM the stored key itself. The hash alone is not trusted: older code
+// regenerating a key rewrites api_key but leaves the hash, which would keep
+// matching the revoked key until the next boot's backfill corrects it.
+const API_KEY_CANDIDATES = '(api_key_hash = $1 OR api_key = $2)';
+
+function apiKeyMatchParams(apiKey: string): [string, string] {
+  return [lookupHash(apiKey), apiKey];
+}
+
+/** Constant-time: is `stored` (sealed or plaintext) the presented key? */
+function storedApiKeyMatches(stored: string, presented: string): boolean {
+  return crypto.timingSafeEqual(
+    Buffer.from(lookupHash(openString(stored)), 'hex'),
+    Buffer.from(lookupHash(presented), 'hex'),
+  );
+}
+
+/** api_key and api_key_hash values for a key being written. */
+function apiKeyColumns(apiKey: string): { sealed: string; hash: string } {
+  return { sealed: sealString(apiKey), hash: lookupHash(apiKey) };
+}
+
 /** Load tokens from Redis for a given google_id (returns undefined if none). */
 async function loadTokensFromRedis(googleId: string | null): Promise<UserTokens | undefined> {
   if (!googleId) return undefined;
   const redis = getRedis();
   const tokensJson = await redis.get(`tokens:${googleId}`);
-  return tokensJson ? JSON.parse(tokensJson) : undefined;
+  return tokensJson ? JSON.parse(openString(tokensJson)) : undefined;
 }
 
 /** Map a database row to a UserRecord. */
 function rowToUserRecord(row: any, tokens?: UserTokens): UserRecord {
   return {
     id: row.id,
-    apiKey: row.api_key,
+    apiKey: openString(row.api_key),
     email: row.email,
     googleId: row.google_id,
     auth0Sub: row.auth0_sub,
@@ -196,7 +239,14 @@ async function dbGetUserBy(whereClause: string, params: any[]): Promise<UserReco
 }
 
 async function dbGetUserByApiKey(apiKey: string): Promise<UserRecord | undefined> {
-  return dbGetUserBy('api_key = $1', [apiKey]);
+  const { rows } = await getPool().query(
+    `SELECT ${DB_USER_COLUMNS} FROM users WHERE ${API_KEY_CANDIDATES}`,
+    apiKeyMatchParams(apiKey)
+  );
+  const row = rows.find((r: any) => storedApiKeyMatches(r.api_key, apiKey));
+  if (!row) return undefined;
+  const tokens = await loadTokensFromRedis(row.google_id);
+  return rowToUserRecord(row, tokens);
 }
 
 async function dbGetUserByGoogleId(googleId: string): Promise<UserRecord | undefined> {
@@ -236,8 +286,8 @@ async function dbCreateOrUpdateUser(
   // 2. Existing user by googleId (update via google_id conflict)
   // 3. Existing user by email only (update via email conflict - links Google account)
   const { rows } = await pool.query(
-    `INSERT INTO users (api_key, email, google_id, name, auth_method, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, 'google', $5, $5)
+    `INSERT INTO users (api_key, api_key_hash, email, google_id, name, auth_method, created_at, updated_at)
+     VALUES ($1, $6, $2, $3, $4, 'google', $5, $5)
      ON CONFLICT (email) DO UPDATE SET
        google_id = EXCLUDED.google_id,
        name = EXCLUDED.name,
@@ -249,13 +299,13 @@ async function dbCreateOrUpdateUser(
        auth_method = CASE WHEN users.password_hash IS NOT NULL THEN users.auth_method ELSE 'google' END,
        updated_at = EXCLUDED.updated_at
      RETURNING id, api_key, email, google_id, name, auth_method, created_at, updated_at`,
-    [apiKey, profile.email, profile.googleId, profile.name, now]
+    [apiKeyColumns(apiKey).sealed, profile.email, profile.googleId, profile.name, now, apiKeyColumns(apiKey).hash]
   );
 
   const row = rows[0];
 
   // Store tokens in Redis
-  await redis.set(`tokens:${profile.googleId}`, JSON.stringify(tokens));
+  await redis.set(`tokens:${profile.googleId}`, sealString(JSON.stringify(tokens)));
 
   return rowToUserRecord(row, tokens);
 }
@@ -265,20 +315,21 @@ async function dbUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Prom
   const redis = getRedis();
 
   const { rows } = await pool.query(
-    'SELECT google_id FROM users WHERE api_key = $1',
-    [apiKey]
+    `SELECT id, google_id, api_key FROM users WHERE ${API_KEY_CANDIDATES}`,
+    apiKeyMatchParams(apiKey)
   );
-  if (rows.length === 0) return;
+  const row = rows.find((r: any) => storedApiKeyMatches(r.api_key, apiKey));
+  if (!row) return;
 
-  const googleId = rows[0].google_id;
+  const googleId = row.google_id;
 
   // Merge with existing tokens
   const existingJson = await redis.get(`tokens:${googleId}`);
-  const existing: UserTokens = existingJson ? JSON.parse(existingJson) : {} as UserTokens;
+  const existing: UserTokens = existingJson ? JSON.parse(openString(existingJson)) : {} as UserTokens;
   const merged = { ...existing, ...tokens };
 
-  await redis.set(`tokens:${googleId}`, JSON.stringify(merged));
-  await pool.query('UPDATE users SET updated_at = NOW() WHERE api_key = $1', [apiKey]);
+  await redis.set(`tokens:${googleId}`, sealString(JSON.stringify(merged)));
+  await pool.query('UPDATE users SET updated_at = NOW() WHERE id = $1', [row.id]);
 }
 
 // ---------- Get All Users ----------
@@ -411,10 +462,10 @@ async function dbCreateUser(profile: { email: string; name: string; auth0Sub?: s
   const pool = getPool();
   const apiKey = generateApiKey();
   const { rows } = await pool.query(
-    `INSERT INTO users (api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at)
-     VALUES ($1, $2, NULL, $3, $4, 'google', NOW(), NOW())
+    `INSERT INTO users (api_key, api_key_hash, email, google_id, auth0_sub, name, auth_method, created_at, updated_at)
+     VALUES ($1, $5, $2, NULL, $3, $4, 'google', NOW(), NOW())
      RETURNING id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at`,
-    [apiKey, profile.email, profile.auth0Sub || null, profile.name]
+    [apiKeyColumns(apiKey).sealed, profile.email, profile.auth0Sub || null, profile.name, apiKeyColumns(apiKey).hash]
   );
   return rowToUserRecord(rows[0]);
 }
@@ -486,10 +537,10 @@ async function dbCreatePasswordUser(profile: {
   const apiKey = generateApiKey();
   try {
     const { rows } = await pool.query(
-      `INSERT INTO users (api_key, email, google_id, name, password_hash, auth_method, created_at, updated_at)
-       VALUES ($1, $2, NULL, $3, $4, 'password', NOW(), NOW())
+      `INSERT INTO users (api_key, api_key_hash, email, google_id, name, password_hash, auth_method, created_at, updated_at)
+       VALUES ($1, $5, $2, NULL, $3, $4, 'password', NOW(), NOW())
        RETURNING ${DB_USER_COLUMNS}`,
-      [apiKey, profile.email, profile.name, profile.passwordHash]
+      [apiKeyColumns(apiKey).sealed, profile.email, profile.name, profile.passwordHash, apiKeyColumns(apiKey).hash]
     );
     return rowToUserRecord(rows[0]);
   } catch (err: any) {
@@ -576,11 +627,12 @@ async function fileRegenerateApiKeyByUserId(userId: number): Promise<UserRecord 
 
 async function dbRegenerateApiKeyByUserId(userId: number): Promise<UserRecord | null> {
   const pool = getPool();
+  const newKey = apiKeyColumns(generateApiKey());
   const { rows } = await pool.query(
-    `UPDATE users SET api_key = $1, updated_at = NOW()
+    `UPDATE users SET api_key = $1, api_key_hash = $3, updated_at = NOW()
      WHERE id = $2
      RETURNING ${DB_USER_COLUMNS}`,
-    [generateApiKey(), userId]
+    [newKey.sealed, userId, newKey.hash]
   );
   if (rows.length === 0) return null;
   const tokens = await loadTokensFromRedis(rows[0].google_id);
