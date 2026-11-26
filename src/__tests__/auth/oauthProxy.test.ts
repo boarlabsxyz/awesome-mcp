@@ -4,6 +4,7 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { createMcpOnlyApp } from '../../website/webServer.js';
 import { storeClient, storeAuthCode, getClient } from '../../website/oauthServer.js';
+import { revokeClient } from '../../website/oauthTokenStore.js';
 import { createOrUpdateUser, UserTokens } from '../../userStore.js';
 
 // --- Environment setup ---
@@ -368,34 +369,49 @@ describe('OAuth proxy routes (real app)', () => {
   // --- /oauth/token ---
 
   describe('POST /oauth/token', () => {
-    it('exchanges valid auth code for apiKey', async () => {
+    /** Store a code for testUser and return what a client would send to redeem it. */
+    async function seedCode(overrides: Record<string, any> = {}) {
       const { verifier, challenge } = makePKCE();
       const code = crypto.randomBytes(16).toString('hex');
       await storeAuthCode(code, {
-        apiKey: testUser.apiKey,
+        userId: testUser.id,
         clientId: 'client-1',
         codeChallenge: challenge,
         codeChallengeMethod: 'S256',
         redirectUri: 'https://chatgpt.com/callback',
         expiresAt: Date.now() + 600_000,
         scope: 'mcp:slack',
+        ...overrides,
       });
+      return { grant_type: 'authorization_code', code, code_verifier: verifier };
+    }
 
+    function refresh(refreshToken: string, extra: Record<string, string> = {}) {
+      return request(app).post('/oauth/token').type('form')
+        .send({ grant_type: 'refresh_token', refresh_token: refreshToken, ...extra });
+    }
+
+    it('exchanges a valid auth code for short-lived tokens, never the API key', async () => {
       const res = await request(app)
         .post('/oauth/token')
         .type('form')
-        .send({
-          grant_type: 'authorization_code',
-          code,
-          code_verifier: verifier,
-          client_id: 'client-1',
-          redirect_uri: 'https://chatgpt.com/callback',
-        });
+        .send({ ...(await seedCode()), client_id: 'client-1', redirect_uri: 'https://chatgpt.com/callback' });
 
       assert.equal(res.status, 200);
-      assert.equal(res.body.access_token, testUser.apiKey);
+      assert.notEqual(res.body.access_token, testUser.apiKey);
+      assert.match(res.body.access_token, /^amcp_at_[A-Za-z0-9_-]{43}$/);
+      assert.match(res.body.refresh_token, /^amcp_rt_[A-Za-z0-9_-]{43}$/);
       assert.equal(res.body.token_type, 'Bearer');
+      assert.equal(res.body.expires_in, 3600);
       assert.equal(res.body.scope, 'mcp:slack');
+      assert.equal(res.headers['cache-control'], 'no-store');
+    });
+
+    it('still redeems a code stored with an API key before the deploy', async () => {
+      const res = await request(app).post('/oauth/token').type('form')
+        .send(await seedCode({ userId: undefined, apiKey: testUser.apiKey }));
+      assert.equal(res.status, 200);
+      assert.match(res.body.access_token, /^amcp_at_/);
     });
 
     it('rejects invalid grant_type', async () => {
@@ -417,68 +433,68 @@ describe('OAuth proxy routes (real app)', () => {
     });
 
     it('rejects wrong PKCE verifier', async () => {
-      const { challenge } = makePKCE();
-      const code = crypto.randomBytes(16).toString('hex');
-      await storeAuthCode(code, {
-        apiKey: 'key',
-        clientId: 'c1',
-        codeChallenge: challenge,
-        codeChallengeMethod: 'S256',
-        redirectUri: 'https://example.com/cb',
-        expiresAt: Date.now() + 600_000,
-      });
-
+      const params = await seedCode();
       const res = await request(app)
         .post('/oauth/token')
         .type('form')
-        .send({ grant_type: 'authorization_code', code, code_verifier: 'wrong' });
+        .send({ ...params, code_verifier: 'wrong' });
       assert.equal(res.status, 400);
       assert.ok(res.body.error_description.includes('PKCE'));
     });
 
     it('prevents auth code reuse', async () => {
-      const { verifier, challenge } = makePKCE();
-      const code = crypto.randomBytes(16).toString('hex');
-      await storeAuthCode(code, {
-        apiKey: 'key',
-        clientId: 'c1',
-        codeChallenge: challenge,
-        codeChallengeMethod: 'S256',
-        redirectUri: 'https://example.com/cb',
-        expiresAt: Date.now() + 600_000,
-      });
-
-      const first = await request(app)
-        .post('/oauth/token')
-        .type('form')
-        .send({ grant_type: 'authorization_code', code, code_verifier: verifier });
+      const params = await seedCode();
+      const first = await request(app).post('/oauth/token').type('form').send(params);
       assert.equal(first.status, 200);
-
-      const second = await request(app)
-        .post('/oauth/token')
-        .type('form')
-        .send({ grant_type: 'authorization_code', code, code_verifier: verifier });
+      const second = await request(app).post('/oauth/token').type('form').send(params);
       assert.equal(second.status, 400);
     });
 
     it('accepts JSON content type', async () => {
-      const { verifier, challenge } = makePKCE();
-      const code = crypto.randomBytes(16).toString('hex');
-      await storeAuthCode(code, {
-        apiKey: 'json-key',
-        clientId: 'c1',
-        codeChallenge: challenge,
-        codeChallengeMethod: 'S256',
-        redirectUri: 'https://example.com/cb',
-        expiresAt: Date.now() + 600_000,
-        scope: 'mcp',
-      });
-
-      const res = await request(app)
-        .post('/oauth/token')
-        .send({ grant_type: 'authorization_code', code, code_verifier: verifier });
+      const res = await request(app).post('/oauth/token').send(await seedCode());
       assert.equal(res.status, 200);
-      assert.equal(res.body.access_token, 'json-key');
+      assert.match(res.body.access_token, /^amcp_at_/);
+    });
+
+    it('rotates the refresh token on use', async () => {
+      const first = await request(app).post('/oauth/token').type('form').send(await seedCode());
+      const res = await refresh(first.body.refresh_token, { client_id: 'client-1' });
+      assert.equal(res.status, 200);
+      assert.match(res.body.access_token, /^amcp_at_/);
+      assert.notEqual(res.body.access_token, first.body.access_token);
+      assert.notEqual(res.body.refresh_token, first.body.refresh_token);
+      assert.equal(res.body.scope, 'mcp:slack', 'keeps the authorized scope');
+    });
+
+    it('revokes the whole family when a spent refresh token is presented again', async () => {
+      const first = await request(app).post('/oauth/token').type('form').send(await seedCode());
+      const rotated = await refresh(first.body.refresh_token);
+      assert.equal(rotated.status, 200);
+
+      const replay = await refresh(first.body.refresh_token);
+      assert.equal(replay.status, 400);
+      assert.equal(replay.body.error, 'invalid_grant');
+
+      // The legitimate holder's newer tokens die with it.
+      const next = await refresh(rotated.body.refresh_token);
+      assert.equal(next.status, 400);
+      const mcp = await request(app).post('/mcp').set('Authorization', `Bearer ${rotated.body.access_token}`);
+      assert.equal(mcp.status, 401);
+    });
+
+    it('refuses a refresh token presented by another client, without spending it', async () => {
+      const first = await request(app).post('/oauth/token').type('form').send(await seedCode());
+      const wrong = await refresh(first.body.refresh_token, { client_id: 'someone-else' });
+      assert.equal(wrong.status, 400);
+      assert.equal(wrong.body.error, 'invalid_grant');
+      const right = await refresh(first.body.refresh_token, { client_id: 'client-1' });
+      assert.equal(right.status, 200);
+    });
+
+    it('rejects a missing or unknown refresh token', async () => {
+      assert.equal((await refresh('')).body.error, 'invalid_request');
+      assert.equal((await refresh('amcp_rt_unknown')).body.error, 'invalid_grant');
+      assert.equal((await refresh(testUser.apiKey)).body.error, 'invalid_grant');
     });
   });
 
@@ -505,6 +521,7 @@ describe('OAuth proxy routes (real app)', () => {
             authorization_endpoint: 'https://test.auth0.com/authorize',
             token_endpoint: 'https://test.auth0.com/oauth/token',
             scopes_supported: ['openid', 'email'],
+            grant_types_supported: ['authorization_code', 'implicit', 'password'],
           },
         },
       });
@@ -516,6 +533,8 @@ describe('OAuth proxy routes (real app)', () => {
       assert.equal(res.body.token_endpoint, 'https://test.example.com/oauth/token');
       assert.equal(res.body.registration_endpoint, 'https://test.example.com/oauth/register');
       assert.ok(Array.isArray(res.body.scopes_supported));
+      // Ours, not whatever Auth0 advertises: our token endpoint does exactly these.
+      assert.deepEqual(res.body.grant_types_supported, ['authorization_code', 'refresh_token']);
 
       restore();
     });
@@ -554,6 +573,73 @@ describe('OAuth proxy routes (real app)', () => {
       const res = await request(app)
         .post('/mcp')
         .set('Authorization', 'Bearer totally-invalid-key');
+      assert.equal(res.status, 401);
+    });
+
+    it('accepts an OAuth access token and refuses it once its client is revoked', async () => {
+      const { verifier, challenge } = makePKCE();
+      const code = crypto.randomBytes(16).toString('hex');
+      await storeAuthCode(code, {
+        userId: testUser.id,
+        clientId: 'revocable-client',
+        codeChallenge: challenge,
+        codeChallengeMethod: 'S256',
+        redirectUri: 'https://example.com/cb',
+        expiresAt: Date.now() + 600_000,
+      });
+      const tok = await request(app).post('/oauth/token').type('form')
+        .send({ grant_type: 'authorization_code', code, code_verifier: verifier });
+      assert.equal(tok.status, 200);
+
+      const ok = await request(app).post('/mcp').set('Authorization', `Bearer ${tok.body.access_token}`);
+      assert.notEqual(ok.status, 401, 'a live access token passes the middleware');
+
+      assert.ok(await revokeClient(testUser.id, 'revocable-client') > 0);
+      const after = await request(app).post('/mcp').set('Authorization', `Bearer ${tok.body.access_token}`);
+      assert.equal(after.status, 401);
+      assert.match(String(after.headers['www-authenticate']), /resource_metadata=.*error="invalid_token"/);
+    });
+
+    it('refuses a revoked token on an open session in the default DUAL_AUTH_MODE too', async () => {
+      // The file pins DUAL_AUTH_MODE=false; the default (unset) is dual mode,
+      // where the edge used to forward these unchecked and FastMCP, which
+      // authenticates a session only at initialize, kept serving it.
+      const { verifier, challenge } = makePKCE();
+      const code = crypto.randomBytes(16).toString('hex');
+      await storeAuthCode(code, {
+        userId: testUser.id, clientId: 'dual-client', codeChallenge: challenge, codeChallengeMethod: 'S256',
+        redirectUri: 'https://example.com/cb', expiresAt: Date.now() + 600_000,
+      });
+      const tok = await request(app).post('/oauth/token').type('form')
+        .send({ grant_type: 'authorization_code', code, code_verifier: verifier });
+      const saved = process.env.DUAL_AUTH_MODE;
+      delete process.env.DUAL_AUTH_MODE;
+      try {
+        const live = await request(app).post('/mcp').set('Authorization', `Bearer ${tok.body.access_token}`);
+        assert.notEqual(live.status, 401);
+        await revokeClient(testUser.id, 'dual-client');
+        const after = await request(app).post('/mcp')
+          .set('Authorization', `Bearer ${tok.body.access_token}`)
+          .set('Mcp-Session-Id', 'an-open-session');
+        assert.equal(after.status, 401);
+        assert.match(String(after.headers['www-authenticate']), /error="invalid_token"/);
+      } finally {
+        if (saved === undefined) delete process.env.DUAL_AUTH_MODE; else process.env.DUAL_AUTH_MODE = saved;
+      }
+    });
+
+    it('clamps an oversized client_name at registration', async () => {
+      const res = await request(app).post('/oauth/register')
+        .send({ client_name: 'x'.repeat(5000), redirect_uris: ['https://example.com/cb'] });
+      assert.equal(res.status, 201);
+      assert.equal(res.body.client_name.length, 100);
+      const odd = await request(app).post('/oauth/register')
+        .send({ client_name: { evil: true }, redirect_uris: ['https://example.com/cb'] });
+      assert.equal(odd.body.client_name, 'MCP Client');
+    });
+
+    it('never treats an unknown amcp_at_ token as an API key', async () => {
+      const res = await request(app).post('/mcp').set('Authorization', 'Bearer amcp_at_madeup');
       assert.equal(res.status, 401);
     });
 

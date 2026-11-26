@@ -196,6 +196,31 @@ CREATE INDEX IF NOT EXISTS idx_clickup_events_sub_time
   ON clickup_task_events(subscription_id, occurred_at DESC);
 `;
 
+// OAuth access and refresh tokens issued by our token endpoint
+// (registerOAuthProxy, webServer.ts), one family per authorization. Only the
+// SHA-256 of a token is stored: tokens are 32 random bytes, so a fast hash
+// suffices and a database dump yields nothing usable. A rotated refresh token
+// is kept (revoked) until it expires, so its reuse can be recognised and the
+// whole family revoked. See src/website/oauthTokenStore.ts.
+const CREATE_OAUTH_TOKENS_TABLE = `
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id           BIGSERIAL PRIMARY KEY,
+  token_hash   CHAR(64) NOT NULL UNIQUE,
+  kind         VARCHAR(10) NOT NULL CHECK (kind IN ('access', 'refresh')),
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id    VARCHAR(255) NOT NULL,
+  client_name  TEXT,
+  scope        TEXT NOT NULL DEFAULT 'mcp',
+  family_id    UUID NOT NULL,
+  expires_at   TIMESTAMPTZ NOT NULL,
+  revoked_at   TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_client ON oauth_tokens(user_id, client_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family ON oauth_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at);
+`;
+
 // Slack channel-event subscriptions.
 //
 // Unlike ClickUp there is no remote object to mirror: Slack event subscriptions
@@ -562,6 +587,8 @@ export async function initDatabase(): Promise<void> {
     await pool.query(CREATE_STORAGE_TABLES);
     await pool.query(CREATE_STORAGE_CONNECTION_UNIQUE_INDEX);
     console.error('Storage MCP tables ensured.');
+    await pool.query(CREATE_OAUTH_TOKENS_TABLE);
+    console.error('OAuth tokens table ensured.');
 
     dbAvailable = true;
 

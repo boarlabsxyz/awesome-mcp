@@ -82,6 +82,8 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
         authorization_endpoint: `${resource}/oauth/authorize`,
         token_endpoint: `${resource}/oauth/token`,
         registration_endpoint: `${resource}/oauth/register`,
+        // Ours, not Auth0's: our /oauth/token implements exactly these.
+        grant_types_supported: ['authorization_code', 'refresh_token'],
         scopes_supported: [
           ...((metadata.scopes_supported as string[]) || []),
           ...scopes.filter(s => !((metadata.scopes_supported as string[]) || []).includes(s)),
@@ -120,7 +122,12 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
   // Dynamic Client Registration (RFC 7591)
   app.post('/oauth/register', express.json(), async (req, res) => {
     try {
-      const { client_name, redirect_uris } = req.body;
+      const { redirect_uris } = req.body;
+      // Anyone can register a client, and its name is shown on the dashboard
+      // and stored with every token: keep it a short string (100 characters).
+      const client_name = typeof req.body.client_name === 'string'
+        ? req.body.client_name.trim().slice(0, 100) || undefined
+        : undefined;
       if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
         res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris is required' });
         return;
@@ -181,7 +188,7 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
       scope,
     });
     // Clean up after 10 minutes
-    setTimeout(() => proxyOAuthStates.delete(internalState), 600_000);
+    setTimeout(() => proxyOAuthStates.delete(internalState), 600_000).unref();
 
     // Build Auth0 authorize URL with OUR callback
     const auth0ClientId = process.env.AUTH0_CLIENT_ID || '';
@@ -281,7 +288,7 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
       // Issue our own authorization code
       const authCode = crypto.randomBytes(32).toString('hex');
       await storeAuthCode(authCode, {
-        apiKey: user.apiKey,
+        userId: user.id!,
         clientId: savedState.clientId,
         codeChallenge: savedState.codeChallenge,
         codeChallengeMethod: savedState.codeChallengeMethod,
@@ -303,18 +310,18 @@ function registerOAuthProxy(app: express.Express, resource: string, scopes: stri
     }
   });
 
-  // Token endpoint — exchange our auth code for user's apiKey
+  // Token endpoint: our auth code or refresh token for short-lived OAuth
+  // tokens (oauthTokenStore.ts), never the user's permanent API key.
   app.post('/oauth/token', express.urlencoded({ extended: false }), express.json(), async (req, res) => {
+    // RFC 6749 §5.1: token responses must not be cached.
+    res.set('Cache-Control', 'no-store');
+    res.set('Pragma', 'no-cache');
     try {
-      const result = await exchangeAuthCode(req.body);
-      if (!result.ok) {
-        const body: Record<string, string> = { error: result.error };
-        if (result.errorDescription) body.error_description = result.errorDescription;
-        res.status(result.status).json(body);
-        return;
+      const result = await handleTokenRequest(req.body);
+      res.status(result.status).json(result.body);
+      if (result.status === 200) {
+        console.error(`[oauth-proxy] Tokens issued for client ${result.clientId} (${req.body?.grant_type})`);
       }
-      res.json({ access_token: result.apiKey, token_type: 'Bearer', scope: result.scope });
-      console.error(`[oauth-proxy] Token issued for client ${result.clientId}`);
     } catch (err: any) {
       console.error('[oauth-proxy] Token exchange error:', err);
       res.status(500).json({ error: 'server_error' });
@@ -326,7 +333,8 @@ import cookieParser from 'cookie-parser';
 import { loadUsers, createOrUpdateUser, getUserByGoogleId, getUserByApiKey, getUserById, getUserByEmail, createPasswordUser, getPasswordHashByEmail, regenerateApiKeyByUserId, getAllUsers, UserRecord, DuplicateEmailError } from '../userStore.js';
 import { normalizeEmail, isValidEmail, validatePassword, hashPassword, verifyPassword } from '../auth/password.js';
 import { loadClientCredentials } from '../auth.js';
-import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, exchangeAuthCode } from './oauthServer.js';
+import { getOAuthState, deleteOAuthState, storeAuthCode, storeClient, getClient, handleTokenRequest } from './oauthServer.js';
+import { isOAuthAccessToken, lookupAccessToken, listClients as listOAuthClients, revokeClient as revokeOAuthClient, revokeAllForUser as revokeAllOAuthTokensForUser } from './oauthTokenStore.js';
 import { instanceIdFromPath, instancePathToQuery, instanceResourceMetadataRoute, resourceMetadataUrl } from '../mcpInstancePath.js';
 import { createSession, getSession, deleteSession, Session } from './sessionStore.js';
 import { consumeLoginAttempt, resetLoginAttempts, RateLimitVerdict, LOGIN_RATE_LIMIT } from './loginRateLimit.js';
@@ -1632,7 +1640,7 @@ function registerSharedRoutes(app: express.Express): void {
           // Generate single-use authorization code
           const authCode = crypto.randomBytes(32).toString('hex');
           await storeAuthCode(authCode, {
-            apiKey: user.apiKey,
+            userId: user.id!,
             clientId: oauthState.clientId,
             codeChallenge: oauthState.codeChallenge,
             codeChallengeMethod: oauthState.codeChallengeMethod,
@@ -4079,11 +4087,52 @@ function registerSharedRoutes(app: express.Express): void {
         res.status(404).json({ error: 'User not found' });
         return;
       }
+      // A key rotation is the "sign everything out" button: OAuth clients
+      // lose their tokens too, not only scripts holding the old key.
+      await revokeAllOAuthTokensForUser(user.id!);
       console.error(`API key regenerated for user: ${user.email} (new key: ${user.apiKey.substring(0, 8)}...)`);
       res.json({ apiKey: user.apiKey });
     } catch (err: any) {
       console.error('Error regenerating API key:', err);
       res.status(500).json({ error: 'Failed to regenerate API key' });
+    }
+  });
+
+  // OAuth clients (Claude, ChatGPT, ...) holding live tokens for this user.
+  app.get('/api/oauth/clients', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const current = await resolveSessionUser(req.session);
+      if (!current?.id) {
+        res.status(401).json({ error: 'Session invalid' });
+        return;
+      }
+      res.json({ clients: await listOAuthClients(current.id) });
+    } catch (err: any) {
+      console.error('Error listing OAuth clients:', err);
+      res.status(500).json({ error: 'Failed to list connected apps' });
+    }
+  });
+
+  // Disconnect one OAuth client: its access and refresh tokens stop working
+  // at once; every other client and the dashboard API key are untouched.
+  app.post('/api/oauth/clients/:clientId/revoke', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const current = await resolveSessionUser(req.session);
+      if (!current?.id) {
+        res.status(401).json({ error: 'Session invalid' });
+        return;
+      }
+      const clientId = String(req.params.clientId);
+      const revoked = await revokeOAuthClient(current.id, clientId);
+      if (revoked === 0) {
+        res.status(404).json({ error: 'No connected app with that id' });
+        return;
+      }
+      console.error(`[oauth] User ${current.id} revoked client ${clientId} (${revoked} tokens)`);
+      res.json({ revoked: true, tokens: revoked });
+    } catch (err: any) {
+      console.error('Error revoking OAuth client:', err);
+      res.status(500).json({ error: 'Failed to disconnect the app' });
     }
   });
 
@@ -4520,6 +4569,16 @@ function registerRestApiRoutes(app: express.Express): void {
         if (restUser) return { user: restUser, mintedInstanceId: rec.instanceId };
       }
     } catch { /* fall through */ }
+
+    // OAuth access token from our /oauth/token: decided here, never probed
+    // against the API-key store or Auth0.
+    if (isOAuthAccessToken(token)) {
+      const record = await lookupAccessToken(token);
+      if (!record) return null;
+      await loadUsers();
+      const tokenUser = await getUserById(record.userId);
+      return tokenUser ? { user: tokenUser } : null;
+    }
 
     // Try API key (cheap local lookup before hitting Auth0)
     await loadUsers();
@@ -11647,14 +11706,8 @@ export function createWebOnlyApp(): express.Express {
   });
 
 
-  // NOTE: OAuth routes (registerOAuthRoutes) are NOT registered here.
-  // In multi-service mode, MCP URLs include apiKey directly (from dashboard).
-  // If we advertise OAuth, Claude.ai would use it instead of the apiKey,
-  // losing the instanceId and picking wrong Google tokens.
-  //
-  // No proxy needed: Claude.ai connects directly to MCP services using the
-  // full URL from the dashboard (which includes the apiKey). Since MCP services
-  // don't advertise OAuth either, the apiKey is used as-is.
+  // The OAuth authorization server is registerOAuthProxy, mounted by each
+  // MCP app (createMcpOnlyApp) and by createWebApp, not here.
 
   // Register all shared routes (auth, dashboard, connect, API, admin, catalogs)
   registerSharedRoutes(app);
@@ -11767,7 +11820,7 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
       return;
     }
 
-    // JWT/Auth0 failed — try apiKey from Bearer header (issued by our OAuth /token endpoint)
+    // JWT/Auth0 failed: try our OAuth access token, then the dashboard API key (pasted URLs, older connectors)
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       res.status(401).setHeader('WWW-Authenticate', mcpWwwAuth).json({
@@ -11780,6 +11833,23 @@ export function createMcpOnlyApp(internalMcpPort: number): express.Express {
     const token = authHeader.slice(7);
     try {
       await loadUsers();
+      // An OAuth access token from our /oauth/token. Expired or revoked is a
+      // 401 with WWW-Authenticate, which is what makes the client refresh.
+      if (isOAuthAccessToken(token)) {
+        const record = await lookupAccessToken(token);
+        const tokenUser = record ? await getUserById(record.userId) : undefined;
+        if (!tokenUser?.id) {
+          res.status(401).setHeader('WWW-Authenticate', `${mcpWwwAuth}, error="invalid_token"`).json({
+            error: 'invalid_token',
+            message: 'Access token expired or revoked. Refresh it or authorize again.',
+          });
+          return;
+        }
+        req.headers['x-mcp-user-id'] = String(tokenUser.id);
+        if (tokenUser.email) req.headers['x-mcp-user-email'] = tokenUser.email;
+        next();
+        return;
+      }
       // Support compound token format: "apiKey.instanceId"
       let apiKey = token;
       const dotIndex = token.lastIndexOf('.');

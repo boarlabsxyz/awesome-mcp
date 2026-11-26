@@ -422,6 +422,17 @@
       line-height: 1.55;
     }
     .sidebar-note strong { color: #ccc; font-weight: 600; }
+    .oauth-clients-hint { margin: 0.35rem 0 0.6rem; }
+    .oauth-clients-list { list-style: none; padding: 0; margin: 0; }
+    .oauth-clients-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.4rem 0;
+    }
+    .oauth-clients-list .oauth-client-meta { min-width: 0; overflow-wrap: anywhere; }
+    .oauth-clients-list .oauth-client-meta span { display: block; font-size: 0.72rem; color: #666; }
     /* Clickable "click to copy" domain chip (used in the tooltip and the note) */
     .copy-domain {
       cursor: pointer;
@@ -1048,6 +1059,12 @@
                   onkeydown="if(event.key==='Enter'||event.key===' ')copyClickUpDomain(event, this)">clickup.awesome-mcp.xyz</code>
                 (click to copy). Then ask Claude to upload an image to a doc.
               </p>
+              <!-- Apps holding OAuth tokens (Claude, ChatGPT, ...). Hidden until there is one. -->
+              <div id="oauthClientsSection" class="sidebar-note oauth-clients hidden">
+                <strong>Connected apps</strong>
+                <p class="oauth-clients-hint">Apps signed in to your account. Disconnecting one signs it out at once; the others keep working.</p>
+                <ul id="oauthClientsList" class="oauth-clients-list"></ul>
+              </div>
             </div>
           </div>
         </div>
@@ -3409,6 +3426,49 @@
       }
     }
 
+    // Connected OAuth apps: each holds its own short-lived tokens, so one can
+    // be disconnected without touching the others or the API key.
+    // client_name comes from dynamic client registration, i.e. from anyone:
+    // escapeHtml for text, escapeAttr (which also escapes quotes) for attributes.
+    async function loadOAuthClients() {
+      const section = document.getElementById('oauthClientsSection');
+      try {
+        const res = await fetch('/api/oauth/clients', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const { clients } = await res.json();
+        const list = document.getElementById('oauthClientsList');
+        list.innerHTML = (clients || []).map(c => `
+          <li>
+            <div class="oauth-client-meta">
+              ${escapeHtml(c.clientName || 'Unnamed app')}
+              <span>since ${escapeHtml(new Date(c.connectedAt).toLocaleDateString())}</span>
+            </div>
+            <button class="btn-delete" type="button" data-client-id="${escapeAttr(c.clientId)}"
+              data-client-name="${escapeAttr(c.clientName || 'this app')}">Disconnect</button>
+          </li>`).join('');
+        list.querySelectorAll('button[data-client-id]').forEach(btn => {
+          btn.addEventListener('click', () => disconnectOAuthClient(btn.dataset.clientId, btn.dataset.clientName));
+        });
+        section.classList.toggle('hidden', !clients || clients.length === 0);
+      } catch {
+        // The list is an extra; the dashboard works without it.
+      }
+    }
+
+    async function disconnectOAuthClient(clientId, clientName) {
+      try {
+        const res = await fetch(`/api/oauth/clients/${encodeURIComponent(clientId)}/revoke`, {
+          method: 'POST',
+          credentials: 'same-origin',
+        });
+        if (!res.ok && res.status !== 404) throw new Error((await res.json().catch(() => ({}))).error || 'Request failed');
+        showSuccess(`Disconnected ${clientName}. It will ask you to sign in again next time.`);
+      } catch (err) {
+        showError(`Could not disconnect ${clientName}: ${err.message}`);
+      }
+      await loadOAuthClients();
+    }
+
     function escapeHtml(text) {
       const div = document.createElement('div');
       div.textContent = text;
@@ -3481,6 +3541,7 @@
         // block on third parties. Rows render with no Reconnect button and one
         // appears only where a provider actually rejected the credential.
         void refreshConnectionHealth();
+        void loadOAuthClients();
 
         // Show success/error message based on redirect params
         if (connectedInstance) {

@@ -58,6 +58,51 @@ describe('resourceServerMiddleware', () => {
     else delete process.env.BASE_URL;
   });
 
+  // --- Our own OAuth access tokens (amcp_at_) ---
+  // Decided on every request in BOTH modes. In dual mode the API-key path
+  // would otherwise pass them on unchecked, and FastMCP re-authenticates a
+  // session only at initialize, so a revoked token kept working mid-session.
+
+  for (const mode of ['true', 'false', undefined]) {
+    const label = mode === undefined ? 'DUAL_AUTH_MODE unset (default)' : `DUAL_AUTH_MODE=${mode}`;
+
+    it(`identifies a live access token and passes it on (${label})`, async () => {
+      if (mode === undefined) delete process.env.DUAL_AUTH_MODE; else process.env.DUAL_AUTH_MODE = mode;
+      const deps = makeDeps({ resolveOAuthAccessToken: mock.fn(async () => fakeUser as any) });
+      const mw = createResourceServerMiddleware(deps);
+      const req = makeReq({ headers: { authorization: 'Bearer amcp_at_live', 'x-mcp-user-id': '999' } as any });
+      const res = makeRes();
+      let nextCalled = false;
+      await mw(req, res as any, (() => { nextCalled = true; }) as NextFunction);
+      assert.ok(nextCalled);
+      assert.equal(req.headers['x-mcp-user-id'], '1', 'the token decides who this is, not the client');
+      assert.equal((deps.validateJwt as any).mock.callCount(), 0);
+    });
+
+    it(`refuses a revoked or expired access token with 401 and WWW-Authenticate (${label})`, async () => {
+      if (mode === undefined) delete process.env.DUAL_AUTH_MODE; else process.env.DUAL_AUTH_MODE = mode;
+      process.env.BASE_URL = 'https://mcp.test';
+      const mw = createResourceServerMiddleware(makeDeps({ resolveOAuthAccessToken: mock.fn(async () => null) }));
+      const req = makeReq({ headers: { authorization: 'Bearer amcp_at_revoked', 'mcp-session-id': 's1' } as any });
+      const res = makeRes();
+      let nextCalled = false;
+      await mw(req, res as any, (() => { nextCalled = true; }) as NextFunction);
+      assert.equal(nextCalled, false, 'never forwarded, open session or not');
+      assert.equal(res._status, 401);
+      assert.equal(res._json?.error, 'invalid_token');
+      assert.match(res._headers['WWW-Authenticate'], /resource_metadata=.*error="invalid_token"/);
+    });
+  }
+
+  it('answers 503, not 401, when the access-token lookup itself fails', async () => {
+    const mw = createResourceServerMiddleware(makeDeps({ resolveOAuthAccessToken: mock.fn(async () => { throw new Error('db down'); }) }));
+    const res = makeRes();
+    let nextCalled = false;
+    await mw(makeReq({ headers: { authorization: 'Bearer amcp_at_x' } as any }), res as any, (() => { nextCalled = true; }) as NextFunction);
+    assert.equal(nextCalled, false);
+    assert.equal(res._status, 503);
+  });
+
   // --- No auth header ---
 
   it('returns 401 when no auth header (JWT-only mode)', async () => {
