@@ -86,7 +86,7 @@ export async function mapJwtToUser(payload: JwtPayload, deps: UserMappingDeps = 
   //    domain list applies to the address the account would get, so with a
   //    list set, an identity with no verified email (the `${sub}@auth0`
   //    fallback) is refused too.
-  if (!isSignupAllowed(verifiedEmail ?? `${payload.sub}@auth0`)) {
+  if (!isSignupAllowed(verifiedEmail ?? `${payload.sub}@auth0`, { exemptAdmins: !!verifiedEmail })) {
     console.error(`[user-mapping] Refusing to create an account for sub=${payload.sub}: sign-up domain not allowed`);
     throw new SignupNotAllowedError();
   }

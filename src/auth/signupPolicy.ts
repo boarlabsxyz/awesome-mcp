@@ -23,16 +23,21 @@ export function allowedSignupDomains(): string[] {
 
 /**
  * True when a new account may be created for `email`. Always true with no list
- * configured, and always true for an ADMIN_EMAILS address, so a list that
- * forgets the admins' own domain cannot lock them out. Anything that is not an
- * address with a domain is refused once a list is set.
+ * configured. Anything that is not an address with a domain is refused once a
+ * list is set.
+ *
+ * `exemptAdmins` lets an ADMIN_EMAILS address through even outside the list,
+ * so a list that forgets the admins' own domain cannot lock them out. Pass it
+ * ONLY where the address is already proven (a verified Google or Auth0 email).
+ * On an unproven path such as password register, a different answer for admin
+ * addresses would tell anyone probing which outside addresses are admins.
  */
-export function isSignupAllowed(email: unknown): boolean {
+export function isSignupAllowed(email: unknown, opts: { exemptAdmins?: boolean } = {}): boolean {
   const domains = allowedSignupDomains();
   if (domains.length === 0) return true;
   if (typeof email !== 'string') return false;
   const normalized = email.trim().toLowerCase();
-  if (isAdminEmail(normalized)) return true;
+  if (opts.exemptAdmins && isAdminEmail(normalized)) return true;
   const at = normalized.lastIndexOf('@');
   if (at <= 0 || at === normalized.length - 1) return false;
   return domains.includes(normalized.slice(at + 1));
@@ -60,9 +65,14 @@ export type GoogleSignInDecision =
 
 /**
  * Whether a Google sign-in may go on to `createOrUpdateUser`, which links by
- * googleId, then by email, then creates.
+ * googleId, then by email, then creates, and writes the email it is given
+ * into the account.
  *
- * - Already linked by googleId: allowed. Nothing is created or newly linked.
+ * - Already linked by googleId, same email: allowed. Nothing changes hands.
+ * - Already linked by googleId, DIFFERENT email: allowed only when Google
+ *   verified the new address, because the account's email is rewritten to it
+ *   and an unproven address must never become an account's email (an admin's,
+ *   say: ADMIN_EMAILS is matched by email).
  * - Matches an existing account only by email: allowed only when Google says
  *   the address is verified. Otherwise anyone who can attach an address to a
  *   Google account without proving it would sign in as its owner (an admin
@@ -77,7 +87,9 @@ export function decideGoogleSignIn(input: {
   byGoogleId: UserRecord | undefined;
   byEmail: UserRecord | undefined;
 }): GoogleSignInDecision {
-  if (input.byGoogleId) return { allowed: true };
+  if (input.byGoogleId && (input.byGoogleId.email === input.email || input.emailVerified === true)) {
+    return { allowed: true };
+  }
   if (input.emailVerified !== true) {
     return {
       allowed: false,
@@ -86,7 +98,8 @@ export function decideGoogleSignIn(input: {
     };
   }
   if (input.byEmail) return { allowed: true };
-  if (!isSignupAllowed(input.email)) {
+  if (input.byGoogleId) return { allowed: true }; // verified, changed email on a linked account
+  if (!isSignupAllowed(input.email, { exemptAdmins: true })) {
     return { allowed: false, reason: 'signup_domain_not_allowed', message: SIGNUP_NOT_ALLOWED_MESSAGE };
   }
   return { allowed: true };

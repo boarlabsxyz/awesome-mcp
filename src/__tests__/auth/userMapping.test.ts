@@ -234,6 +234,20 @@ describe('mapJwtToUser with a sign-up domain list', () => {
     await assert.rejects(() => mapJwtToUser(noEmail, deps), SignupNotAllowedError);
   });
 
+  it('lets a verified ADMIN_EMAILS address through, but not an unverified one', async () => {
+    process.env.ALLOWED_SIGNUP_DOMAINS = 'corp.test';
+    const savedAdmins = process.env.ADMIN_EMAILS;
+    process.env.ADMIN_EMAILS = 'user@test.com';
+    try {
+      const deps = makeDeps();
+      await mapJwtToUser(payload, deps); // payload: user@test.com, verified
+      assert.equal((deps.createUser as any).mock.callCount(), 1);
+      await assert.rejects(() => mapJwtToUser({ ...payload, sub: 'auth0|u', emailVerified: false }, makeDeps()), SignupNotAllowedError);
+    } finally {
+      if (savedAdmins === undefined) delete process.env.ADMIN_EMAILS; else process.env.ADMIN_EMAILS = savedAdmins;
+    }
+  });
+
   it('creates an account inside the list', async () => {
     process.env.ALLOWED_SIGNUP_DOMAINS = 'test.com';
     const deps = makeDeps();

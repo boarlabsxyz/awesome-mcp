@@ -53,18 +53,39 @@ describe('isSignupAllowed', () => {
     }
   });
 
-  it('always allows an ADMIN_EMAILS address', () => {
+  it('exempts an ADMIN_EMAILS address only when the caller says the address is proven', () => {
     process.env.ALLOWED_SIGNUP_DOMAINS = 'corp.test';
     process.env.ADMIN_EMAILS = 'boss@outside.test';
-    assert.equal(isSignupAllowed('Boss@outside.test'), true);
-    assert.equal(isSignupAllowed('other@outside.test'), false);
+    assert.equal(isSignupAllowed('Boss@outside.test', { exemptAdmins: true }), true);
+    assert.equal(isSignupAllowed('Boss@outside.test'), false, 'unproven paths answer by domain alone');
+    assert.equal(isSignupAllowed('other@outside.test', { exemptAdmins: true }), false);
   });
 });
 
 describe('decideGoogleSignIn', () => {
-  it('allows an account already linked by googleId, verified or not, inside the list or not', () => {
+  it('allows an account already linked by googleId with the same email, verified or not, inside the list or not', () => {
     process.env.ALLOWED_SIGNUP_DOMAINS = 'corp.test';
     const d = decideGoogleSignIn({ email: 'a@outside.test', emailVerified: false, byGoogleId: someone, byEmail: undefined });
+    assert.deepEqual(d, { allowed: true });
+  });
+
+  it('refuses a linked googleId that brings a changed, unverified email', () => {
+    // createOrUpdateUser would write it into the account: an admin's, say.
+    process.env.ADMIN_EMAILS = 'boss@corp.test';
+    const d = decideGoogleSignIn({ email: 'boss@corp.test', emailVerified: false, byGoogleId: someone, byEmail: undefined });
+    assert.equal(!d.allowed && d.reason, 'email_not_verified');
+  });
+
+  it('allows a linked googleId whose changed email Google verified', () => {
+    process.env.ALLOWED_SIGNUP_DOMAINS = 'corp.test';
+    const d = decideGoogleSignIn({ email: 'new@elsewhere.test', emailVerified: true, byGoogleId: someone, byEmail: undefined });
+    assert.deepEqual(d, { allowed: true });
+  });
+
+  it('lets a verified ADMIN_EMAILS address create an account outside the list', () => {
+    process.env.ALLOWED_SIGNUP_DOMAINS = 'corp.test';
+    process.env.ADMIN_EMAILS = 'boss@outside.test';
+    const d = decideGoogleSignIn({ email: 'boss@outside.test', emailVerified: true, byGoogleId: undefined, byEmail: undefined });
     assert.deepEqual(d, { allowed: true });
   });
 

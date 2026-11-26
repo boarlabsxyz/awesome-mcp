@@ -55,6 +55,12 @@ function registerInstanceResourceMetadata(app: express.Express, baseUrl: string,
   });
 }
 
+/** mapJwtToUser refused the identity (sign-up domain, unverified email): final, never retryable. */
+function isIdentityRefusal(err: unknown): err is Error {
+  const name = (err as any)?.name;
+  return name === 'SignupNotAllowedError' || name === 'UnverifiedEmailError';
+}
+
 /** Register OAuth discovery + proxy endpoints (RFC 9728 + RFC 8414 + /authorize, /token, /register). */
 function registerOAuthProxy(app: express.Express, resource: string, scopes: string[]): void {
   const auth0Audience = process.env.AUTH0_AUDIENCE || '';
@@ -4537,7 +4543,12 @@ function registerRestApiRoutes(app: express.Express): void {
         const payload = await validateJwt(token);
         const jwtUser = await mapJwtToUser(payload);
         return jwtUser ? { user: jwtUser } : null;
-      } catch { /* not a valid JWT — try next */ }
+      } catch (err) {
+        // A valid token whose identity we refuse is not a bad bearer:
+        // createServiceAuth answers it with 403, never "Invalid token".
+        if (isIdentityRefusal(err)) throw err;
+        /* not a valid JWT — try next */
+      }
     }
 
     // Try short-lived REST token (5-min, minted by mintRestBearerForCurl MCP tool)
@@ -4560,7 +4571,10 @@ function registerRestApiRoutes(app: express.Express): void {
       const payload = await validateOpaqueToken(token);
       const opaqueUser = await mapJwtToUser(payload);
       return opaqueUser ? { user: opaqueUser } : null;
-    } catch { /* not a valid opaque token either */ }
+    } catch (err) {
+      if (isIdentityRefusal(err)) throw err;
+      /* not a valid opaque token either */
+    }
 
     return null;
   }
@@ -4762,6 +4776,14 @@ function registerRestApiRoutes(app: express.Express): void {
         req.user = user;
         next();
       } catch (err: any) {
+        // The bearer is fine; the account it names is refused. A 401 here
+        // would tell the client its token is bad and send it round a
+        // re-authentication loop (root CLAUDE.md: a REST 401 means a bad bearer).
+        if (isIdentityRefusal(err)) {
+          const error = err.name === 'SignupNotAllowedError' ? 'signup_domain_not_allowed' : 'email_not_verified';
+          res.status(403).json({ error, message: err.message });
+          return;
+        }
         console.error(`[${primarySlug}] REST API auth error:`, err.message);
         res.status(500).json({ error: 'Authentication failed' });
       }

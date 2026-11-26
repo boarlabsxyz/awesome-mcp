@@ -877,13 +877,15 @@ describe('Email + password authentication', () => {
       } finally { restore(); }
     });
 
-    it('always lets an ADMIN_EMAILS address sign up', async () => {
-      const email = freshEmail();
+    it('answers an admin address outside the list exactly like any other, so register reveals no admins', async () => {
+      const admin = freshEmail();
       process.env.ALLOWED_SIGNUP_DOMAINS = 'allowed.test';
-      process.env.ADMIN_EMAILS = email;
+      process.env.ADMIN_EMAILS = admin;
       try {
-        const res = await registerAndVerify(email);
-        assert.equal(res.headers.location, '/dashboard');
+        const asAdmin = await request(app).post('/api/auth/register').send({ email: admin, password: GOOD_PASSWORD });
+        const asOther = await request(app).post('/api/auth/register').send({ email: freshEmail(), password: GOOD_PASSWORD });
+        assert.equal(asAdmin.status, 403);
+        assert.deepEqual(asAdmin.body, asOther.body);
       } finally { restore(); }
     });
 
