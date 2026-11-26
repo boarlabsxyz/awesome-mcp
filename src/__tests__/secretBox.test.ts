@@ -3,6 +3,7 @@ import { describe, it, afterEach } from 'node:test';
 import {
   SecretBoxConfigError,
   activeKeyId,
+  assertEncryptionConfig,
   generateKeyEntry,
   isEncryptionEnabled,
   isSealed,
@@ -17,11 +18,19 @@ import {
   sealedKeyId,
 } from '../util/secretBox.js';
 
-const saved = process.env.TOKEN_ENCRYPTION_KEYS;
+const saved = { keys: process.env.TOKEN_ENCRYPTION_KEYS, seal: process.env.TOKEN_ENCRYPTION_SEAL };
 afterEach(() => {
-  if (saved === undefined) delete process.env.TOKEN_ENCRYPTION_KEYS;
-  else process.env.TOKEN_ENCRYPTION_KEYS = saved;
+  if (saved.keys === undefined) delete process.env.TOKEN_ENCRYPTION_KEYS;
+  else process.env.TOKEN_ENCRYPTION_KEYS = saved.keys;
+  if (saved.seal === undefined) delete process.env.TOKEN_ENCRYPTION_SEAL;
+  else process.env.TOKEN_ENCRYPTION_SEAL = saved.seal;
 });
+
+/** Keys listed AND sealing on: rollout step 3. */
+function sealWith(keys: string): void {
+  process.env.TOKEN_ENCRYPTION_KEYS = keys;
+  process.env.TOKEN_ENCRYPTION_SEAL = 'true';
+}
 
 const K1 = generateKeyEntry('k1');
 const K2 = generateKeyEntry('k2');
@@ -39,7 +48,7 @@ describe('secretBox with no keys configured', () => {
   });
 
   it('still refuses to open a sealed value it has no key for', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     const sealed = sealString('secret');
     delete process.env.TOKEN_ENCRYPTION_KEYS;
     assert.throws(() => openString(sealed), /key "k1", which is not in TOKEN_ENCRYPTION_KEYS/);
@@ -48,7 +57,7 @@ describe('secretBox with no keys configured', () => {
 
 describe('secretBox with keys', () => {
   it('seals strings so the plaintext does not appear, and opens them', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     const sealed = sealString('ya29.super-secret-token');
     assert.ok(isSealed(sealed));
     assert.ok(sealed.startsWith('enc1:k1:'));
@@ -57,17 +66,17 @@ describe('secretBox with keys', () => {
   });
 
   it('uses a fresh IV per seal', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     assert.notEqual(sealString('same'), sealString('same'));
   });
 
   it('round-trips unicode and the empty string', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     for (const v of ['', 'ключ 🔑', 'x'.repeat(10_000)]) assert.equal(openString(sealString(v)), v);
   });
 
   it('seals JSON for a JSONB column and opens it, objects or their JSON text', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     const tokens = { access_token: 'a', refresh_token: 'r', accessRules: { allowedOrgs: ['T1'] } };
     const sealed = sealJson(tokens);
     assert.ok(isSealedJson(sealed));
@@ -79,7 +88,7 @@ describe('secretBox with keys', () => {
   });
 
   it('opens plaintext as is, so a half-migrated table reads', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     assert.equal(openString('plain-api-key'), 'plain-api-key');
     assert.deepEqual(openJson({ access_token: 'a' }), { access_token: 'a' });
     assert.deepEqual(openJson('{"access_token":"a"}'), { access_token: 'a' });
@@ -87,15 +96,8 @@ describe('secretBox with keys', () => {
     assert.equal(openOptionalString(undefined), undefined);
   });
 
-  it('does not mistake a plaintext object with an __enc field plus others for a sealed one', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
-    const v = { __enc: sealString('x'), other: 1 };
-    assert.equal(isSealedJson(v), false);
-    assert.deepEqual(openJson(v), v);
-  });
-
   it('rejects a tampered ciphertext', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     const sealed = sealString('secret');
     const body = Buffer.from(sealed.slice('enc1:k1:'.length), 'base64');
     body[body.length - 1] ^= 1;
@@ -103,15 +105,15 @@ describe('secretBox with keys', () => {
   });
 
   it('rejects a value moved under another key id', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = `${K1},${K2}`;
+    sealWith(`${K1},${K2}`);
     const sealed = sealString('secret');
     assert.throws(() => openString(sealed.replace('enc1:k1:', 'enc1:k2:')));
   });
 
   it('rotates: the first key seals, every listed key opens', () => {
-    process.env.TOKEN_ENCRYPTION_KEYS = K1;
+    sealWith(K1);
     const old = sealString('secret');
-    process.env.TOKEN_ENCRYPTION_KEYS = `${K2},${K1}`;
+    sealWith(`${K2},${K1}`);
     assert.equal(activeKeyId(), 'k2');
     assert.equal(openString(old), 'secret');
     const fresh = sealString('secret');
@@ -122,8 +124,52 @@ describe('secretBox with keys', () => {
   it('refuses a malformed key list rather than guessing', () => {
     for (const bad of ['nokid', 'k1:' + Buffer.alloc(16).toString('base64'), 'bad id:' + Buffer.alloc(32).toString('base64'), `${K1},${K1}`]) {
       process.env.TOKEN_ENCRYPTION_KEYS = bad;
-      assert.throws(() => isEncryptionEnabled(), SecretBoxConfigError, bad.slice(0, 10));
+      assert.throws(() => assertEncryptionConfig(), SecretBoxConfigError, bad.slice(0, 10));
     }
+  });
+});
+
+describe('secretBox rollout stages', () => {
+  it('opens but never seals with keys listed and TOKEN_ENCRYPTION_SEAL unset (step 2)', () => {
+    sealWith(K1);
+    const sealed = sealString('secret');
+    delete process.env.TOKEN_ENCRYPTION_SEAL;
+    assert.equal(isEncryptionEnabled(), false);
+    assert.equal(activeKeyId(), null);
+    assert.equal(sealString('plain'), 'plain', 'writes stay plaintext');
+    assert.deepEqual(sealJson({ a: 1 }), { a: 1 });
+    assert.equal(openString(sealed), 'secret', 'reads of sealed values still work');
+  });
+
+  it('opens a value sealed with a key listed second, before that key seals anything', () => {
+    sealWith(K2);
+    const byK2 = sealString('secret');
+    sealWith(`${K1},${K2}`);
+    assert.equal(activeKeyId(), 'k1');
+    assert.equal(openString(byK2), 'secret');
+  });
+
+  it('recovers a sealed object that SQL merged keys into, newer keys winning', () => {
+    sealWith(K1);
+    const sealed = sealJson({ access_token: 'old', refresh_token: 'r', accessRules: { allowedOrgs: ['T1'] } }) as object;
+    const merged = { ...sealed, access_token: 'new' };
+    assert.deepEqual(openJson(merged), { access_token: 'new', refresh_token: 'r', accessRules: { allowedOrgs: ['T1'] } });
+    assert.equal(sealedJsonKeyId(merged), null, 'reported unsealed, so the backfill re-seals it');
+  });
+
+  it('validates the configuration up front', () => {
+    sealWith(K1);
+    assert.doesNotThrow(() => assertEncryptionConfig());
+    process.env.TOKEN_ENCRYPTION_SEAL = 'yes';
+    assert.throws(() => assertEncryptionConfig(), SecretBoxConfigError);
+    delete process.env.TOKEN_ENCRYPTION_KEYS;
+    process.env.TOKEN_ENCRYPTION_SEAL = 'true';
+    assert.throws(() => assertEncryptionConfig(), /needs at least one key/);
+    process.env.TOKEN_ENCRYPTION_KEYS = 'k1:c2hvcnQ=';
+    assert.throws(() => assertEncryptionConfig(), /32 bytes/);
+    delete process.env.TOKEN_ENCRYPTION_KEYS;
+    delete process.env.TOKEN_ENCRYPTION_SEAL;
+    assert.doesNotThrow(() => assertEncryptionConfig(), 'unset is valid: plaintext');
   });
 });
 

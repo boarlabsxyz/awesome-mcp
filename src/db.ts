@@ -456,7 +456,24 @@ ALTER TABLE mcp_catalog ALTER COLUMN google_client_secret TYPE TEXT;
 ALTER TABLE clickup_webhook_subscriptions ALTER COLUMN shared_secret TYPE TEXT;
 `;
 
+/**
+ * Wraps a failure after the database connected that must stop the process.
+ * initDatabase's catch otherwise falls back to file storage, which for a
+ * running deployment means every user's data silently disappears from view.
+ */
+class FatalDatabaseInitError extends Error {
+  constructor(readonly original: unknown) {
+    super(`Database initialisation failed after connecting: ${(original as any)?.message || original}`);
+    this.name = 'FatalDatabaseInitError';
+  }
+}
+
 export async function initDatabase(): Promise<void> {
+  // Before anything touches storage, in file mode too: a malformed key must
+  // stop the boot (src/util/secretBox.ts), not surface later as a storage error.
+  const { assertEncryptionConfig } = await import('./util/secretBox.js');
+  assertEncryptionConfig();
+
   const redisUrl = process.env.REDIS_URL;
   const databaseUrl = process.env.DATABASE_URL;
 
@@ -578,9 +595,13 @@ export async function initDatabase(): Promise<void> {
     // Seal stored credentials (or re-seal after a key rotation) before any
     // store reads them. Dynamic import: secretsBackfill imports nothing from
     // the stores, but keeping it out of db.ts's static graph keeps it that way.
-    await pool.query(ALTER_FOR_SEALED_SECRETS);
-    const { backfillStoredSecrets } = await import('./secretsBackfill.js');
-    await backfillStoredSecrets(pool, redis);
+    try {
+      await pool.query(ALTER_FOR_SEALED_SECRETS);
+      const { backfillStoredSecrets } = await import('./secretsBackfill.js');
+      await backfillStoredSecrets(pool, redis);
+    } catch (err) {
+      throw new FatalDatabaseInitError(err);
+    }
 
     dbAvailable = true;
 
@@ -612,9 +633,13 @@ export async function initDatabase(): Promise<void> {
       console.error('[db] failed to start usage tracking:', err?.message || err);
     }
   } catch (err) {
-    console.error('Failed to connect to database(s), falling back to file storage:', err);
     await cleanupPartial();
     dbAvailable = false;
+    if (err instanceof FatalDatabaseInitError) {
+      console.error(`FATAL: ${err.message}`);
+      throw err.original;
+    }
+    console.error('Failed to connect to database(s), falling back to file storage:', err);
   }
 }
 

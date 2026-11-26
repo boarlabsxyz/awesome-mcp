@@ -2,7 +2,7 @@
 // TOKEN_ENCRYPTION_KEYS (src/util/secretBox.ts), run by initDatabase before the
 // stores are used:
 //
-// - fills users.api_key_hash for every row (lookups go by the hash);
+// - fills or corrects users.api_key_hash for every row (lookups go by the hash);
 // - with encryption on, seals every plaintext credential and re-seals every
 //   value sealed with a key that is no longer first in the list (rotation).
 //
@@ -53,9 +53,12 @@ async function backfillUsers(db: Queryable): Promise<BackfillReport> {
   const report: BackfillReport = { table: 'users', updated: 0, skippedConcurrent: 0, failed: 0 };
   const { rows } = await db.query('SELECT id, api_key, api_key_hash FROM users');
   for (const row of rows) {
-    if (row.api_key_hash && !stringNeedsSeal(row.api_key)) continue;
     try {
       const apiKey = openString(row.api_key);
+      // Recomputed, not just checked for presence: a replica on older code
+      // that regenerates a key rewrites api_key but leaves the hash, which
+      // would otherwise keep matching the revoked key.
+      if (row.api_key_hash === lookupHash(apiKey) && !stringNeedsSeal(row.api_key)) continue;
       const result = await db.query(
         'UPDATE users SET api_key = $1, api_key_hash = $2 WHERE id = $3 AND api_key = $4',
         [sealString(apiKey), lookupHash(apiKey), row.id, row.api_key],
@@ -170,7 +173,9 @@ async function backfillRedis(redis: Redis): Promise<BackfillReport> {
  */
 export async function backfillStoredSecrets(db: Queryable, redis?: Redis): Promise<BackfillReport[]> {
   if (!isEncryptionEnabled()) {
-    console.error('[secrets-backfill] TOKEN_ENCRYPTION_KEYS is not set: tokens and client secrets are stored in PLAINTEXT. Set it to encrypt them at rest.');
+    console.error(process.env.TOKEN_ENCRYPTION_KEYS
+      ? '[secrets-backfill] TOKEN_ENCRYPTION_KEYS is set but TOKEN_ENCRYPTION_SEAL is not "true": sealed values are opened, nothing new is sealed (rollout step 2).'
+      : '[secrets-backfill] TOKEN_ENCRYPTION_KEYS is not set: tokens and client secrets are stored in PLAINTEXT. See src/util/secretBox.ts for the rollout.');
   }
   const reports = [
     await backfillUsers(db),

@@ -4,15 +4,24 @@
 // AES-256-GCM with keys from TOKEN_ENCRYPTION_KEYS:
 //
 //   TOKEN_ENCRYPTION_KEYS="k2:<base64 32 bytes>,k1:<base64 32 bytes>"
+//   TOKEN_ENCRYPTION_SEAL=true
 //
-// The FIRST key encrypts; every listed key decrypts, by the key id written into
-// each value. Rotating is: put a new key first, keep the old one listed,
-// restart (initDatabase re-seals every row to the first key), then drop the old
-// one. Losing every key that sealed a value loses the value, so users must
-// reconnect: back the keys up outside the database.
+// Every listed key DECRYPTS, by the key id written into each value. Writes are
+// sealed, with the FIRST key, only when TOKEN_ENCRYPTION_SEAL is also 'true'.
+// The two settings are separate so that no service ever meets a value it
+// cannot read: during a deploy the old and new versions of each service run
+// side by side, and code without the key, or code from before this module,
+// must never see a sealed row. Hence the rollout, every step on every service
+// before the next:
+//   1. deploy this code with neither variable (behaves like before);
+//   2. set TOKEN_ENCRYPTION_KEYS (decrypt-only: nothing is sealed yet);
+//   3. set TOKEN_ENCRYPTION_SEAL=true (writes and the boot backfill seal).
+// Rotation the same way: add the new key SECOND, then move it first (the boot
+// backfill re-seals to it), then drop the old one. Losing every key that sealed
+// a value loses the value, so users must reconnect: back the keys up outside
+// the database.
 //
-// Unset means no encryption and plaintext as before (a warning is logged at
-// boot), so existing and dev deployments keep running. Reading is
+// Unset means plaintext as before (a warning is logged at boot). Reading is
 // format-driven, not configuration-driven: a sealed value is always opened, a
 // plaintext one is always returned as is, so a half-migrated table reads fine.
 //
@@ -62,14 +71,33 @@ function keyring(): Keyring {
   return ring;
 }
 
-/** True when TOKEN_ENCRYPTION_KEYS is set, i.e. writes are sealed. */
+/**
+ * True when writes are sealed: TOKEN_ENCRYPTION_SEAL is 'true' and a key is
+ * listed. With keys but no SEAL, values are only opened (rollout step 2).
+ */
 export function isEncryptionEnabled(): boolean {
-  return keyring().active !== null;
+  return process.env.TOKEN_ENCRYPTION_SEAL === 'true' && keyring().active !== null;
 }
 
-/** The key id new values are sealed with, or null when encryption is off. */
+/**
+ * Validate the configuration, throwing SecretBoxConfigError. Called at boot
+ * before anything else touches storage: a bad key must stop the process, not
+ * surface later as a storage error that degrades it.
+ */
+export function assertEncryptionConfig(): void {
+  const ring = keyring();
+  const seal = process.env.TOKEN_ENCRYPTION_SEAL;
+  if (seal !== undefined && seal !== '' && seal !== 'true' && seal !== 'false') {
+    throw new SecretBoxConfigError(`TOKEN_ENCRYPTION_SEAL must be "true" or "false", got "${seal}"`);
+  }
+  if (seal === 'true' && !ring.active) {
+    throw new SecretBoxConfigError('TOKEN_ENCRYPTION_SEAL=true needs at least one key in TOKEN_ENCRYPTION_KEYS');
+  }
+}
+
+/** The key id new values are sealed with, or null when sealing is off. */
 export function activeKeyId(): string | null {
-  return keyring().active?.kid ?? null;
+  return isEncryptionEnabled() ? keyring().active!.kid : null;
 }
 
 /** True for a value in the sealed string form. */
@@ -84,10 +112,10 @@ export function sealedKeyId(value: string): string | null {
   return end > 0 ? value.slice(PREFIX.length, end) : null;
 }
 
-/** Seal a string with the active key; returns it unchanged when encryption is off. */
+/** Seal a string with the active key; returns it unchanged when sealing is off. */
 export function sealString(plain: string): string {
-  const { active } = keyring();
-  if (!active) return plain;
+  if (!isEncryptionEnabled()) return plain;
+  const active = keyring().active!;
   const iv = crypto.randomBytes(IV_BYTES);
   const cipher = crypto.createCipheriv('aes-256-gcm', active.key, iv);
   const ct = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
@@ -133,10 +161,29 @@ export function sealJson<T>(value: T): T | SealedJson {
   return { __enc: sealString(JSON.stringify(value)) };
 }
 
+/**
+ * A sealed JSONB value with other keys beside `__enc`: what a jsonb merge in
+ * SQL (`provider_tokens || '{...}'`) makes of a sealed row. Code from before
+ * sealing does exactly that, and the rollout exists to keep it away from
+ * sealed rows; if it happens anyway, the secrets inside `__enc` must not be
+ * thrown away by reading the object as plaintext.
+ */
+function isMixedSealedJson(value: unknown): value is SealedJson & Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length > 1 && isSealed((value as SealedJson).__enc);
+}
+
 /** Open a JSONB column value (object or its JSON text); plaintext is returned parsed, as is. */
 export function openJson<T = any>(value: unknown): T {
   const parsed = typeof value === 'string' ? JSON.parse(value) : value;
   if (isSealedJson(parsed)) return JSON.parse(openString(parsed.__enc));
+  if (isMixedSealedJson(parsed)) {
+    // The keys beside __enc were written after it was sealed, so they win.
+    // The boot backfill re-seals the merged object (sealedJsonKeyId is null).
+    const { __enc, ...newer } = parsed;
+    console.error('[secretBox] a sealed value was merged into in SQL; recovering it by overlaying the newer keys');
+    return { ...JSON.parse(openString(__enc)), ...newer } as T;
+  }
   return parsed as T;
 }
 

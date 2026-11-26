@@ -12,9 +12,11 @@ import * as path from 'node:path';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'secrets-at-rest-'));
 process.env.DATA_DIR = dataDir;
 const savedKeys = process.env.TOKEN_ENCRYPTION_KEYS;
+const savedSeal = process.env.TOKEN_ENCRYPTION_SEAL;
 
 const box = await import('../util/secretBox.js');
 process.env.TOKEN_ENCRYPTION_KEYS = box.generateKeyEntry('t1');
+process.env.TOKEN_ENCRYPTION_SEAL = 'true';
 
 const LEGACY_KEY = 'a'.repeat(64);
 const SEALED_KEY = 'b'.repeat(64);
@@ -45,6 +47,8 @@ after(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
   if (savedKeys === undefined) delete process.env.TOKEN_ENCRYPTION_KEYS;
   else process.env.TOKEN_ENCRYPTION_KEYS = savedKeys;
+  if (savedSeal === undefined) delete process.env.TOKEN_ENCRYPTION_SEAL;
+  else process.env.TOKEN_ENCRYPTION_SEAL = savedSeal;
 });
 
 describe('secrets at rest, file mode', () => {

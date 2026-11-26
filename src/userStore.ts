@@ -175,16 +175,25 @@ async function fileUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Pr
 
 const DB_USER_COLUMNS = 'id, api_key, email, google_id, auth0_sub, name, auth_method, created_at, updated_at';
 
-// The API key is stored sealed (src/util/secretBox.ts) when
-// TOKEN_ENCRYPTION_KEYS is set, so it cannot be matched in SQL. Lookups go by
-// api_key_hash, its SHA-256 (32 random bytes: no work factor needed). A row
-// without a hash yet (written by a replica still on the old code during a
-// rolling deploy) still matches by the plaintext column until
-// initDatabase's backfill fills it.
-const API_KEY_MATCH = '(api_key_hash = $1 OR (api_key_hash IS NULL AND api_key = $2))';
+// The API key is stored sealed (src/util/secretBox.ts) when sealing is on, so
+// it cannot be matched in SQL. Lookups find candidates by api_key_hash, its
+// SHA-256 (32 random bytes: no work factor needed), or by the plaintext column
+// (a key written by a replica on older code during a rolling deploy), and then
+// CONFIRM the stored key itself. The hash alone is not trusted: older code
+// regenerating a key rewrites api_key but leaves the hash, which would keep
+// matching the revoked key until the next boot's backfill corrects it.
+const API_KEY_CANDIDATES = '(api_key_hash = $1 OR api_key = $2)';
 
 function apiKeyMatchParams(apiKey: string): [string, string] {
   return [lookupHash(apiKey), apiKey];
+}
+
+/** Constant-time: is `stored` (sealed or plaintext) the presented key? */
+function storedApiKeyMatches(stored: string, presented: string): boolean {
+  return crypto.timingSafeEqual(
+    Buffer.from(lookupHash(openString(stored)), 'hex'),
+    Buffer.from(lookupHash(presented), 'hex'),
+  );
 }
 
 /** api_key and api_key_hash values for a key being written. */
@@ -230,7 +239,14 @@ async function dbGetUserBy(whereClause: string, params: any[]): Promise<UserReco
 }
 
 async function dbGetUserByApiKey(apiKey: string): Promise<UserRecord | undefined> {
-  return dbGetUserBy(API_KEY_MATCH, apiKeyMatchParams(apiKey));
+  const { rows } = await getPool().query(
+    `SELECT ${DB_USER_COLUMNS} FROM users WHERE ${API_KEY_CANDIDATES}`,
+    apiKeyMatchParams(apiKey)
+  );
+  const row = rows.find((r: any) => storedApiKeyMatches(r.api_key, apiKey));
+  if (!row) return undefined;
+  const tokens = await loadTokensFromRedis(row.google_id);
+  return rowToUserRecord(row, tokens);
 }
 
 async function dbGetUserByGoogleId(googleId: string): Promise<UserRecord | undefined> {
@@ -299,12 +315,13 @@ async function dbUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Prom
   const redis = getRedis();
 
   const { rows } = await pool.query(
-    `SELECT google_id FROM users WHERE ${API_KEY_MATCH}`,
+    `SELECT id, google_id, api_key FROM users WHERE ${API_KEY_CANDIDATES}`,
     apiKeyMatchParams(apiKey)
   );
-  if (rows.length === 0) return;
+  const row = rows.find((r: any) => storedApiKeyMatches(r.api_key, apiKey));
+  if (!row) return;
 
-  const googleId = rows[0].google_id;
+  const googleId = row.google_id;
 
   // Merge with existing tokens
   const existingJson = await redis.get(`tokens:${googleId}`);
@@ -312,7 +329,7 @@ async function dbUpdateTokens(apiKey: string, tokens: Partial<UserTokens>): Prom
   const merged = { ...existing, ...tokens };
 
   await redis.set(`tokens:${googleId}`, sealString(JSON.stringify(merged)));
-  await pool.query(`UPDATE users SET updated_at = NOW() WHERE ${API_KEY_MATCH}`, apiKeyMatchParams(apiKey));
+  await pool.query('UPDATE users SET updated_at = NOW() WHERE id = $1', [row.id]);
 }
 
 // ---------- Get All Users ----------
