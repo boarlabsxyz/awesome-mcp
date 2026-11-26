@@ -12,7 +12,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRootDir = path.resolve(__dirname, '..');
 
-const TOKEN_PATH = path.join(projectRootDir, 'token.json');
+// The stdio OAuth flow writes its token here. With DATA_DIR set (the Docker
+// image sets /app/data, the only directory its non-root user can write), it
+// goes there; without it, the project root as before.
+const TOKEN_PATH = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, 'token.json')
+  : path.join(projectRootDir, 'token.json');
 const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
 // --- End of path calculation ---
 
