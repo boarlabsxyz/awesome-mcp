@@ -18,6 +18,7 @@ import { resourceServerMiddleware, createResourceServerMiddleware, stripTrustedI
 import { ALL_SCOPES, getScopesForSlug } from '../auth/scopeMap.js';
 import { validateJwt, validateOpaqueToken, hasScope } from '../auth/jwtValidator.js';
 import { mapJwtToUser } from '../auth/userMapping.js';
+import { decideGoogleSignIn, isSignupAllowed, SIGNUP_NOT_ALLOWED_MESSAGE } from '../auth/signupPolicy.js';
 import { looksLikeJwt } from '../auth/resourceServerMiddleware.js';
 import { buildMeetConferenceData, hasExistingConference } from '../google-calendar/conferenceFormatter.js';
 
@@ -1602,6 +1603,21 @@ function registerSharedRoutes(app: express.Express): void {
       // Get existing user to preserve refresh_token if Google didn't send a new one
       const existingUser = await getUserByGoogleId(profile.id);
 
+      // createOrUpdateUser links by email and creates when nothing matches, so
+      // the verified-email and sign-up-domain rules must run before it.
+      const decision = decideGoogleSignIn({
+        email: profile.email,
+        emailVerified: profile.verified_email,
+        byGoogleId: existingUser,
+        byEmail: existingUser ? undefined : await getUserByEmail(profile.email),
+      });
+      if (!decision.allowed) {
+        console.error(`[auth/callback] Google sign-in refused: ${decision.reason}`);
+        // Plain text: the message carries the address Google returned.
+        res.status(403).type('text/plain').send(decision.message);
+        return;
+      }
+
       const user = await createOrUpdateUser(
         {
           email: profile.email,
@@ -1731,6 +1747,12 @@ function registerSharedRoutes(app: express.Express): void {
         res.status(400).json({ error: policyError });
         return;
       }
+      // Decided by the domain alone, before any lookup, so the answer says
+      // nothing about whether the address already has an account.
+      if (!isSignupAllowed(email)) {
+        res.status(403).json({ error: SIGNUP_NOT_ALLOWED_MESSAGE, code: 'signup_domain_not_allowed' });
+        return;
+      }
 
       const gate = await guardAttempt(req, email);
       if (!gate.allowed) {
@@ -1838,6 +1860,13 @@ function registerSharedRoutes(app: express.Express): void {
         // Unknown, already used, and expired are deliberately one answer:
         // distinguishing them tells a probe which tokens once existed.
         failure('invalid');
+        return;
+      }
+
+      // Checked again here: the list may have changed while the link waited.
+      // The record stays consumed; the link can never succeed now.
+      if (!isSignupAllowed(pending.email)) {
+        failure('domain');
         return;
       }
 

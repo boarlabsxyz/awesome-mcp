@@ -256,6 +256,24 @@ describe('resourceServerMiddleware', () => {
     assert.equal(res._json?.error, 'email_not_verified');
   });
 
+  it('returns 403, not a retryable 503, when the sign-up domain list refuses a new account', async () => {
+    const refused = Object.assign(new Error('not in an approved domain'), { name: 'SignupNotAllowedError' });
+    for (const viaOpaque of [false, true]) {
+      const deps = makeDeps({
+        mapJwtToUser: mock.fn(async () => { throw refused; }),
+        ...(viaOpaque ? { validateOpaqueToken: mock.fn(async () => ({ ...fakePayload, isOpaque: true })) } : {}),
+      });
+      const mw = createResourceServerMiddleware(deps);
+      const token = viaOpaque ? fakeOpaqueToken : 'eyJhbGciOiJSUzI1NiJ9.eyJ0ZXN0IjoxfQ.validsig';
+      const res = makeRes();
+      let nextCalled = false;
+      await mw(makeReq({ headers: { authorization: `Bearer ${token}` } }), res as any, (() => { nextCalled = true; }) as NextFunction);
+      assert.equal(nextCalled, false);
+      assert.equal(res._status, 403, viaOpaque ? 'opaque path' : 'JWT path');
+      assert.equal(res._json?.error, 'signup_domain_not_allowed');
+    }
+  });
+
   it('skips scope check for unknown routes', async () => {
     const deps = makeDeps({ getRequiredScope: mock.fn(() => null) });
     const mw = createResourceServerMiddleware(deps);
