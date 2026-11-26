@@ -144,9 +144,9 @@ ALTER TABLE mcp_catalog
 // ClickUp task-event webhook subscriptions.
 // One row per (user, workspace) — per-user scoping keeps a departing user's
 // creator-binding failure to their own digest rather than everyone's. The
-// shared_secret is stored as-is: it's issued per-webhook by ClickUp and is
-// only ever used HMAC-side for verifying inbound POSTs; we don't send it back
-// out to the caller.
+// shared_secret is issued per-webhook by ClickUp and only ever used HMAC-side
+// for verifying inbound POSTs; we don't send it back out to the caller. It is
+// sealed at rest when TOKEN_ENCRYPTION_KEYS is set (src/util/secretBox.ts).
 const CREATE_CLICKUP_WEBHOOK_SUBSCRIPTIONS_TABLE = `
 CREATE TABLE IF NOT EXISTS clickup_webhook_subscriptions (
   id                   SERIAL PRIMARY KEY,
@@ -444,6 +444,18 @@ BEGIN
 END $$;
 `;
 
+// Columns that hold credentials sealed at rest (src/util/secretBox.ts). A
+// sealed value is longer than the plaintext, so the VARCHAR limits go
+// (varchar -> text is binary-coercible: no table rewrite). api_key_hash is
+// what API-key lookups match on once api_key is sealed.
+const ALTER_FOR_SEALED_SECRETS = `
+ALTER TABLE users ALTER COLUMN api_key TYPE TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_hash CHAR(64);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key_hash ON users(api_key_hash);
+ALTER TABLE mcp_catalog ALTER COLUMN google_client_secret TYPE TEXT;
+ALTER TABLE clickup_webhook_subscriptions ALTER COLUMN shared_secret TYPE TEXT;
+`;
+
 export async function initDatabase(): Promise<void> {
   const redisUrl = process.env.REDIS_URL;
   const databaseUrl = process.env.DATABASE_URL;
@@ -562,6 +574,13 @@ export async function initDatabase(): Promise<void> {
     await pool.query(CREATE_STORAGE_TABLES);
     await pool.query(CREATE_STORAGE_CONNECTION_UNIQUE_INDEX);
     console.error('Storage MCP tables ensured.');
+
+    // Seal stored credentials (or re-seal after a key rotation) before any
+    // store reads them. Dynamic import: secretsBackfill imports nothing from
+    // the stores, but keeping it out of db.ts's static graph keeps it that way.
+    await pool.query(ALTER_FOR_SEALED_SECRETS);
+    const { backfillStoredSecrets } = await import('./secretsBackfill.js');
+    await backfillStoredSecrets(pool, redis);
 
     dbAvailable = true;
 
