@@ -58,6 +58,7 @@ Service-specific rules and limitations live next to the code, in nested `CLAUDE.
 - **Hidden connectors seed `isActive` from `<NAME>_ENABLED`** — strict `=== 'true'`, so anything else (including unset) means `false`; flipping it is a restart, not a deploy. Seed rather than skip, so existing connections are not orphaned.
 - **Reconnect merges keep any non-empty `providerTokens.accessRules`** (`PRESERVED_ON_RECONNECT`). To clear rules, delete the key — `{}` is non-empty and would survive every reconnect.
 - **`sharedToolsRegistration.test.ts` strips whole-line `//` comments before block comments.** The order is load-bearing: a line comment ending in `/` + `*` would otherwise swallow the registration calls after it.
+- **Each test worker gets a private `DATA_DIR`** (`tests/setup/isolateDataDir.mjs`, preloaded by the `test` scripts), unless the test file sets one. A shared `./data` let parallel workers tear each other's file-store JSON and fail unrelated suites. Never rely on `./data` in a test, and run single files with the same `--import` flags if they touch the file stores.
 
 ## Source Files (shared)
 
