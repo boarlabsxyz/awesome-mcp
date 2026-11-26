@@ -29,8 +29,12 @@ credentials.json
 token.json
 *.pem
 
-# Build output and tooling that never belongs in the image.
+# Build output and tooling that never belongs in the image. Patterns match from
+# the context root only, so tests under src/ need their own entries (tsc would
+# otherwise compile them into dist/__tests__ in the runtime image).
 dist
+src/__tests__
+**/*.test.ts
 coverage
 e2e
 .claude
