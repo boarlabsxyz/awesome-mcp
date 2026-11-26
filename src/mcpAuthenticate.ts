@@ -3,6 +3,7 @@
 import http from 'http';
 import { UserSession, createUserSession, createUserSessionFromConnection, createClickUpSession, createSlackBotSession, createSlackUserSession, createOutlineSession, createPeopleForceSession, createPeopleForceV4Session, createHubSpotSession, createRedmineSession, createBrowserbaseSession, createGitHubSession, createPineconeSession, createSupabaseSession, createAdminSession, createStorageSession, createSandboxSession } from './userSession.js';
 import { loadUsers, getUserByApiKey, getUserById } from './userStore.js';
+import { isOAuthAccessToken, lookupAccessToken } from './website/oauthTokenStore.js';
 import { loadClientCredentials } from './auth.js';
 import { getMcpConnection, getMcpConnectionByInstanceId } from './mcpConnectionStore.js';
 import { getMcpCatalog } from './mcpCatalogStore.js';
@@ -13,6 +14,8 @@ export interface AuthDeps {
   loadUsers: () => Promise<void>;
   getUserByApiKey: (key: string) => Promise<any>;
   getUserById: (id: number) => Promise<any>;
+  /** The live record behind an OAuth access token (`amcp_at_…`), or null. */
+  lookupOAuthAccessToken: (token: string) => Promise<{ userId: number } | null>;
   loadClientCredentials: () => Promise<{ client_id: string; client_secret: string }>;
   getMcpConnection: (userId: any, slug: string) => Promise<any>;
   getMcpConnectionByInstanceId: (id: string) => Promise<any>;
@@ -41,6 +44,7 @@ const defaultDeps: AuthDeps = {
   loadUsers,
   getUserByApiKey,
   getUserById,
+  lookupOAuthAccessToken: lookupAccessToken,
   loadClientCredentials,
   getMcpConnection,
   getMcpConnectionByInstanceId,
@@ -235,6 +239,22 @@ export async function authenticateRequest(
 
   if (!rawToken) {
     throw new Response(null, { status: 401, statusText: 'Missing API key. Provide Authorization: Bearer <key> header.' } as any);
+  }
+
+  // An OAuth access token from our token endpoint. Short-lived and revocable,
+  // so an unknown one is a 401 the client answers by refreshing; it never
+  // falls through to the API-key lookup.
+  if (isOAuthAccessToken(rawToken)) {
+    const record = await deps.lookupOAuthAccessToken(rawToken);
+    if (!record) {
+      throw new Response(null, { status: 401, statusText: 'Access token expired or revoked. Refresh it or authorize again.' } as any);
+    }
+    await deps.loadUsers();
+    const tokenUser = await deps.getUserById(record.userId);
+    if (!tokenUser) {
+      throw new Response(null, { status: 401, statusText: 'The account behind this access token no longer exists.' } as any);
+    }
+    return resolveSession(tokenUser, mcpSlug, url.searchParams.get('instanceId') || undefined, deps);
   }
 
   // Support compound token format: "apiKey.instanceId"

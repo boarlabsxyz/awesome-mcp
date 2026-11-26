@@ -18,7 +18,7 @@ function makePKCE(): { verifier: string; challenge: string } {
 async function seedAuthCode(code: string, overrides: Record<string, any> = {}): Promise<{ verifier: string }> {
   const { verifier, challenge } = makePKCE();
   await storeAuthCode(code, {
-    apiKey: 'test-api-key',
+    userId: 42,
     clientId: 'client-1',
     codeChallenge: challenge,
     codeChallengeMethod: 'S256',
@@ -132,10 +132,10 @@ describe('exchangeAuthCode', () => {
     }
   });
 
-  it('succeeds with valid params and returns apiKey', async () => {
+  it('succeeds with valid params and returns the user id, never an API key', async () => {
     const code = crypto.randomBytes(16).toString('hex');
     const { verifier } = await seedAuthCode(code, {
-      apiKey: 'my-api-key',
+      userId: 7,
       clientId: 'client-1',
       scope: 'mcp:slack',
     });
@@ -148,7 +148,8 @@ describe('exchangeAuthCode', () => {
     });
     assert.equal(result.ok, true);
     if (result.ok) {
-      assert.equal(result.apiKey, 'my-api-key');
+      assert.equal(result.userId, 7);
+      assert.equal('apiKey' in result, false);
       assert.equal(result.scope, 'mcp:slack');
       assert.equal(result.clientId, 'client-1');
     }

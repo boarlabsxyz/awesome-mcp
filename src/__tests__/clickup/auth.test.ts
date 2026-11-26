@@ -29,6 +29,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     loadUsers: mock.fn(async () => {}),
     getUserByApiKey: mock.fn(async (key: string) => key === 'validkey' ? fakeUser : null),
     getUserById: mock.fn(async (id: number) => String(id) === String(fakeUser.id) ? fakeUser : null),
+    lookupOAuthAccessToken: mock.fn(async (token: string) => token === 'amcp_at_live' ? { userId: fakeUser.id as any } : null),
     loadClientCredentials: mock.fn(async () => ({ client_id: 'gcid', client_secret: 'gsec' })),
     getMcpConnection: mock.fn(async () => null),
     getMcpConnectionByInstanceId: mock.fn(async () => null),

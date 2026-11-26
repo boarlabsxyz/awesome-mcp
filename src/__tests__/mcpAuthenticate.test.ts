@@ -13,6 +13,7 @@ function makeDeps(overrides: Partial<AuthDeps> = {}): AuthDeps {
     loadUsers: mock.fn(async () => {}),
     getUserByApiKey: mock.fn(async (key: string) => key === 'validkey' ? fakeUser : null),
     getUserById: mock.fn(async (id: number) => String(id) === String(fakeUser.id) ? fakeUser : null),
+    lookupOAuthAccessToken: mock.fn(async (token: string) => token === 'amcp_at_live' ? { userId: fakeUser.id as any } : null),
     loadClientCredentials: mock.fn(async () => ({ client_id: 'gcid', client_secret: 'gsec' })),
     getMcpConnection: mock.fn(async () => null),
     getMcpConnectionByInstanceId: mock.fn(async () => null),
@@ -97,6 +98,26 @@ describe('authenticateRequest', () => {
       assert.equal(e.status, 403);
       assert.ok(e.statusText.includes('User ID not found'));
     }
+  });
+
+  it('accepts a live OAuth access token and resolves its user by id', async () => {
+    const deps = makeDeps({ getMcpConnection: mock.fn(async () => fakeConnection) });
+    await authenticateRequest(makeRequest({ authorization: 'Bearer amcp_at_live' }), 'google-docs', deps);
+    assert.equal((deps.lookupOAuthAccessToken as any).mock.calls.length, 1);
+    assert.equal((deps.getUserById as any).mock.calls[0].arguments[0], fakeUser.id);
+    assert.equal((deps.getUserByApiKey as any).mock.calls.length, 0, 'never probed as an API key');
+  });
+
+  it('answers 401 for an expired or revoked OAuth access token, without trying it as an API key', async () => {
+    const deps = makeDeps({ getUserByApiKey: mock.fn(async () => fakeUser) });
+    try {
+      await authenticateRequest(makeRequest({ authorization: 'Bearer amcp_at_revoked' }), 'google-docs', deps);
+      assert.fail('expected throw');
+    } catch (e: any) {
+      assert.equal(e.status, 401);
+      assert.match(e.statusText, /expired or revoked/);
+    }
+    assert.equal((deps.getUserByApiKey as any).mock.calls.length, 0);
   });
 
   it('handles compound token format (apiKey.instanceId)', async () => {
